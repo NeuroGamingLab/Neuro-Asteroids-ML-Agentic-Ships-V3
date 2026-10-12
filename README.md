@@ -5,9 +5,9 @@
   Your browser does not support the video tag.
 </video>
 
-<!--![Asteroids AI 3D Sphere Swarm Combat](assets/gameplay_3d_action-1.png)-->
+![Asteroids AI 3D Sphere Swarm Combat](assets/gameplay_3d_action-1.png)
 
-<!--![Asteroids AI 3D Sphere Tactical Engagement](assets/gameplay_3d_action-2.png)-->
+![Asteroids AI 3D Sphere Tactical Engagement](assets/gameplay_3d_action-2.png)
 
 ---
 
