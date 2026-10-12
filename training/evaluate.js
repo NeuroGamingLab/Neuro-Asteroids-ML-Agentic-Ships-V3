@@ -68,6 +68,7 @@
         const survivors = [];
         const refuels = [];
         const dockDeaths = [];
+        const kills = { asteroids: [], enemies: [], bosses: [] };
 
         for (const seed of seeds) {
             let obs = env.reset(seed);
@@ -86,6 +87,11 @@
             scores.push(res.info.score);
             lengths.push(res.info.step);
             survivors.push(res.info.aliveCount);
+            if (res.info.kills) {
+                kills.asteroids.push(res.info.kills.asteroids);
+                kills.enemies.push(res.info.kills.enemies);
+                kills.bosses.push(res.info.kills.bosses);
+            }
             if (res.info.fuel) {
                 refuels.push(res.info.fuel.refuels);
                 dockDeaths.push(res.info.fuel.dockDeaths);
@@ -102,12 +108,21 @@
             ciLength: ci95(lengths),
             meanSurvivors: mean(survivors)
         };
+        if (kills.asteroids.length) {
+            // Per 1000 steps, so scenarios with different horizons stay comparable.
+            const perK = (arr) => mean(arr.map((k, i) => k * 1000 / Math.max(1, lengths[i])));
+            summary.killsPer1k = {
+                asteroids: perK(kills.asteroids),
+                enemies: perK(kills.enemies),
+                bosses: perK(kills.bosses)
+            };
+        }
         if (refuels.length) {
             summary.meanRefuels = mean(refuels);
             summary.meanDockDeaths = mean(dockDeaths);
         }
 
-        return { returns, scores, lengths, survivors, summary };
+        return { returns, scores, lengths, survivors, kills, summary };
     }
 
     function randomPolicy(rng, actionSize) {

@@ -207,3 +207,7 @@ training_runs/
 !.github/**
 !ml-app-enhancement-reviews/
 !ml-app-enhancement-reviews/*.md
+# Benchmark baselines are small, deterministic reference numbers that CI checks
+# against; unlike checkpoints they belong in the repo.
+!training/benchmarks/
+!training/benchmarks/*.json
