@@ -77,6 +77,26 @@ frame.addEventListener('load', async () => {
         // initGame() puts the ship back at the centre; it was parked at (100, 100).
         check('game restarted by itself after game over', Math.abs(run('ship.x') - 100) > 50, 'ship.x=' + run('ship.x'));
 
+        // Waves: on by default in a browser. Force a wave, clear it, and make sure the
+        // overlay and boss bar draw (they run inside draw() on every frame).
+        threw = null;
+        try {
+            run('initGame(); setNumEnemyShips(6); setNumBossShips(2); setPlayerShipActive(false);');
+            check('waves are on in the browser by default', run('wavesEnabled'));
+            check('field starts empty in wave mode', run('enemyShips.length') === 0, run('enemyShips.length'));
+            run('for (let i = 0; i < WAVE_FIRST_INTERMISSION_FRAMES + 5; i++) { update(); draw(); }');
+            check('wave 1 spawned', run('waveState.wave') === 1 && run('enemyShips.length') > 0, 'wave=' + run('waveState.wave'));
+            run('enemyShips = []; update(); draw();');
+            check('clearing a wave registers', run('waveState.cleared') === 1);
+            run('for (let i = 0; i < 3 * (WAVE_INTERMISSION_FRAMES + 20); i++) { if (enemyShips.length === 0 && waveState.mode === "active") enemyShips = []; update(); draw(); }');
+            check('later waves keep coming', run('waveState.wave') >= 2, 'wave=' + run('waveState.wave'));
+            // Boss bar + phase change: bring a boss in and drop its health.
+            run('enemyShips = [new EnemyShip(null, null, "boss")];');
+            run('const b = enemyShips[0]; b.health = Math.floor(b.maxHealth * 0.5); b.checkHealth(); for (let i = 0; i < 10; i++) { update(); draw(); }');
+            check('boss phase change notifies the game', run('enemyShips.some(e => e && e.type === "boss" && e.escortsSummoned)'));
+        } catch (e) { threw = e; }
+        check('wave and boss UI draw without throwing', !threw, threw && threw.stack);
+
         // Optional hooks from later features: only checked when present.
         if (query.get('extra')) {
             try { (window.extraChecks || (() => {}))(cw, run, check); } catch (e) { check('extra checks', false, e.stack); }

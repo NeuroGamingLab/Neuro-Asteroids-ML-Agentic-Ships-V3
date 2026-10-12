@@ -134,7 +134,8 @@ def main():
                 problems.append("hostile string was not escaped")
         if name == "defaults (torus)":
             joined = "".join(parser.inline)
-            for needed in ("setSoundEnabled", "setMusicEnabled", "setKillCamEnabled"):
+            for needed in ("setSoundEnabled", "setMusicEnabled", "setKillCamEnabled",
+                           "setWavesEnabled", "setBossPhasePlusEnabled"):
                 if needed not in joined:
                     problems.append(f"missing {needed} in the injected settings")
 

@@ -92,6 +92,11 @@
             this.curriculumStage = options.curriculumStage || 0;
             // Optional overrides of the stage's enemy / boss counts, so benchmark
             // scenarios can ask for a bigger fleet without a new curriculum stage.
+            // Gameplay layers that are off for training by default so that results
+            // stay comparable with earlier runs: escalating waves, and the boss
+            // escort / enrage mechanics.
+            this.waves = !!options.waves;
+            this.bossPhases = !!options.bossPhases;
             this.enemiesOverride = Number.isFinite(options.enemies) ? options.enemies : null;
             this.bossesOverride = Number.isFinite(options.bosses) ? options.bosses : null;
             this.reward = Object.assign({}, DEFAULT_REWARD, options.reward || {});
@@ -150,6 +155,11 @@
             }
 
             marlEnabledSafeOff();
+
+            // Set explicitly on every reset: game.js defaults both on in a browser
+            // and a previous env instance may have left them either way.
+            wavesEnabled = this.waves;
+            bossPhasePlusEnabled = this.bossPhases;
 
             // The fuel mechanic requires the alpha formation. Set both flags
             // explicitly either way so a stale browser default cannot leak in.
@@ -421,6 +431,7 @@
                     episodeTaskReturn: this.episodeTaskReturn.slice(),
                     timeLimit: this.stepCount >= this.maxSteps && anyAlive,
                     kills: Object.assign({}, this.killStats),
+                    wave: waveState.wave,
                     fuel: this.fuelRescue ? Object.assign({}, this.fuelStats) : null
                 }
             };

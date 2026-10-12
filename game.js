@@ -56,6 +56,11 @@
         advancedFlankingEnabled: [() => advancedFlankingEnabled, (value) => { advancedFlankingEnabled = value; }],
         fuelRescueEnabled: [() => fuelRescueEnabled, (value) => { fuelRescueEnabled = value; }],
         fuelRescueDispatchCooldown: [() => fuelRescueDispatchCooldown, (value) => { fuelRescueDispatchCooldown = value; }],
+        wavesEnabled: [() => wavesEnabled, (value) => { wavesEnabled = value; }],
+        bossPhasePlusEnabled: [() => bossPhasePlusEnabled, (value) => { bossPhasePlusEnabled = value; }],
+        waveState: [() => waveState],
+        WAVE_FIRST_INTERMISSION_FRAMES: [() => WAVE_FIRST_INTERMISSION_FRAMES],
+        WAVE_INTERMISSION_FRAMES: [() => WAVE_INTERMISSION_FRAMES],
     };
     for (const name of Object.keys(publicState)) {
         const [get, set] = publicState[name];
@@ -88,6 +93,8 @@
     root.setupTouchControls = setupTouchControls;
     root.update = update;
     root.triggerEMPBlast = triggerEMPBlast;
+    root.onBossPhaseChange = onBossPhaseChange;
+    root.waveSpec = waveSpec;
     root.draw = draw;
     root.updateScore = updateScore;
     root.updateAIShipCount = updateAIShipCount;
@@ -386,6 +393,53 @@ function playBossAlert() {
 }
 
 // Falling tone for the game-over screen.
+function playWaveSound(cleared) {
+    if (!sfxEnabled || !audioContext || !audioContextResumed) return;
+    const now = audioContext.currentTime;
+    // Rising triple for an incoming wave, a bright major chord for a clear.
+    const notes = cleared ? [523.25, 659.25, 783.99] : [392.0, 523.25, 659.25];
+    try {
+        notes.forEach((freq, i) => {
+            const osc = audioContext.createOscillator();
+            const gain = audioContext.createGain();
+            const t0 = now + (cleared ? 0 : i * 0.13);
+            osc.type = cleared ? 'sine' : 'triangle';
+            osc.frequency.setValueAtTime(freq, t0);
+            gain.gain.setValueAtTime(0, t0);
+            gain.gain.linearRampToValueAtTime(0.07, t0 + 0.02);
+            gain.gain.exponentialRampToValueAtTime(0.001, t0 + (cleared ? 0.7 : 0.35));
+            osc.connect(gain); gain.connect(audioContext.destination);
+            osc.start(t0); osc.stop(t0 + 0.75);
+            osc.onended = () => { osc.disconnect(); gain.disconnect(); };
+        });
+    } catch (e) {
+        console.log('Error playing wave sound:', e);
+    }
+}
+
+function playBossPhaseSound(phase) {
+    if (!sfxEnabled || !audioContext || !audioContextResumed) return;
+    const now = audioContext.currentTime;
+    try {
+        const osc = audioContext.createOscillator();
+        const filter = audioContext.createBiquadFilter();
+        const gain = audioContext.createGain();
+        osc.type = 'sawtooth';
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(phase === 3 ? 1400 : 800, now);
+        osc.frequency.setValueAtTime(phase === 3 ? 300 : 220, now);
+        osc.frequency.exponentialRampToValueAtTime(phase === 3 ? 70 : 110, now + 0.6);
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.linearRampToValueAtTime(0.12, now + 0.04);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.7);
+        osc.connect(filter); filter.connect(gain); gain.connect(audioContext.destination);
+        osc.start(now); osc.stop(now + 0.75);
+        osc.onended = () => { osc.disconnect(); filter.disconnect(); gain.disconnect(); };
+    } catch (e) {
+        console.log('Error playing boss phase sound:', e);
+    }
+}
+
 function playGameOverSound() {
     if (!sfxEnabled || !audioContext || !audioContextResumed) return;
     const now = audioContext.currentTime;
@@ -1314,10 +1368,18 @@ function initGame(seed) {
     updateScore();
     // Initialize AI ships at random locations
     updateAIShips();
-    // Initialize enemy ships (basic/advanced)
-    updateEnemyShips();
-    // Initialize boss ships
-    updateBossShips();
+    waveState = newWaveState();
+    bossBanner = { text: '', timer: 0 };
+    if (!wavesEnabled) {
+        // Initialize enemy ships (basic/advanced)
+        updateEnemyShips();
+        // Initialize boss ships
+        updateBossShips();
+    } else {
+        // Wave mode: the schedule in updateWaves() brings the fleet in.
+        updateEnemyShipCount();
+        updateBossShipCount();
+    }
     // Don't reset playerShipActive here - preserve current state
     // playerShipActive state is managed by Streamlit toggle
 }
@@ -1421,12 +1483,14 @@ function updateBossShips() {
 // Function to set number of enemy ships (called from Streamlit)
 window.setNumEnemyShips = function(count) {
     numEnemyShips = Math.max(0, Math.min(10, count)); // Limit between 0 and 10
+    if (wavesEnabled) { updateEnemyShipCount(); return; } // ceiling only; waves do the spawning
     updateEnemyShips();
 };
 
 // Function to set number of boss ships (called from Streamlit)
 window.setNumBossShips = function(count) {
     numBossShips = Math.max(0, Math.min(10, count)); // Limit between 0 and 10
+    if (wavesEnabled) { updateBossShipCount(); return; }
     updateBossShips();
 };
 
@@ -1780,6 +1844,243 @@ function triggerEMPBlast(x, y) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Escalating waves and boss phases
+//
+// Without this the game had no spawning after the opening fleet: kill the enemies
+// and only asteroids were left. Waves give the match a shape. The sliders (enemy
+// and boss counts, up to 10) become the *ceiling*: wave 1 sends about a third of
+// them, the full count arrives by wave 5, a boss shows up every third wave, and
+// every wave after that is faster and trigger-happier.
+//
+// Both features are off in the headless trainer so that training, benchmarks and
+// the baseline CI gate keep measuring the same game; sim/env.js switches them on
+// explicitly (options.waves / options.bossPhases) when you want to train or
+// evaluate against them.
+// ---------------------------------------------------------------------------
+let wavesEnabled = !isHeadlessEnv();
+let bossPhasePlusEnabled = !isHeadlessEnv();
+const WAVE_FIRST_INTERMISSION_FRAMES = 90;
+const WAVE_INTERMISSION_FRAMES = 150;
+const WAVE_FULL_STRENGTH = 5;      // wave at which the configured enemy count is reached
+const WAVE_BOSS_EVERY = 3;
+const WAVE_BANNER_FRAMES = 140;
+const MAX_ENEMIES_ON_FIELD = 24;   // hard cap including boss escorts
+
+function newWaveState() {
+    return {
+        wave: 0,                  // 0 until the first wave starts
+        mode: 'intermission',     // 'intermission' | 'active'
+        timer: WAVE_FIRST_INTERMISSION_FRAMES,
+        banner: '',
+        subBanner: '',
+        bannerTimer: 0,
+        spec: null,
+        cleared: 0
+    };
+}
+let waveState = newWaveState();
+let bossBanner = { text: '', timer: 0 };
+
+function waveSpec(n) {
+    const ramp = Math.min(1, (n + 1) / (WAVE_FULL_STRENGTH + 1));
+    const enemies = numEnemyShips > 0 ? Math.max(1, Math.round(numEnemyShips * ramp)) : 0;
+    const bossWave = numBossShips > 0 && n % WAVE_BOSS_EVERY === 0;
+    const bosses = bossWave ? Math.min(numBossShips, 1 + Math.floor((n - WAVE_BOSS_EVERY) / (WAVE_BOSS_EVERY * 2))) : 0;
+    return {
+        n,
+        enemies,
+        bosses,
+        advancedShare: Math.min(0.7, 0.1 + 0.08 * (n - 1)),
+        firePressure: Math.min(2.0, 1 + 0.06 * (n - 1)),
+        speedPressure: Math.min(1.5, 1 + 0.03 * (n - 1))
+    };
+}
+
+function applyWavePressure(enemy, spec) {
+    enemy.fireRate = Math.max(6, Math.round(enemy.fireRate / spec.firePressure));
+    enemy.maxVelocity *= spec.speedPressure;
+}
+
+function startWave(n) {
+    const w = waveState;
+    const spec = waveSpec(n);
+    w.wave = n;
+    w.spec = spec;
+    w.mode = 'active';
+    for (let i = 0; i < spec.enemies; i++) {
+        const type = gameRandom() < spec.advancedShare ? 'advanced' : 'basic';
+        const e = new EnemyShip(null, null, type);
+        applyWavePressure(e, spec);
+        enemyShips.push(e);
+    }
+    for (let i = 0; i < spec.bosses; i++) {
+        spawnEnemyShip('boss');
+        applyWavePressure(enemyShips[enemyShips.length - 1], spec);
+    }
+    w.banner = 'WAVE ' + n;
+    w.subBanner = spec.enemies + ' hostiles' + (spec.bosses ? ' + ' + (spec.bosses > 1 ? spec.bosses + ' BOSSES' : 'BOSS') : '');
+    w.bannerTimer = WAVE_BANNER_FRAMES;
+    playWaveSound(false);
+    if (typeof killFeedPush === 'function') killFeedPush('WAVE ' + n + ': ' + w.subBanner, spec.bosses ? '#FF3D00' : '#00E5FF');
+    updateEnemyShipCount();
+    updateBossShipCount();
+}
+
+function completeWave() {
+    const w = waveState;
+    const bonus = 100 * w.wave;
+    w.cleared++;
+    w.mode = 'intermission';
+    w.timer = WAVE_INTERMISSION_FRAMES;
+    score += bonus;
+    updateScore();
+    w.banner = 'WAVE ' + w.wave + ' CLEARED';
+    w.subBanner = '+' + bonus + ' bonus   -   next wave incoming';
+    w.bannerTimer = WAVE_BANNER_FRAMES;
+    if (!isHeadlessEnv()) powerUps.push(new PowerUp(worldW() / 2, worldH() / 2));
+    playWaveSound(true);
+    if (typeof killFeedPush === 'function') killFeedPush('WAVE ' + w.wave + ' CLEARED  +' + bonus, '#00FF66');
+    updateEnemyShipCount();
+    updateBossShipCount();
+}
+
+function updateWaves() {
+    if (bossBanner.timer > 0) bossBanner.timer--;
+    if (!wavesEnabled) return;
+    // Nothing to send if both counts are zero: asteroids-only play.
+    if (numEnemyShips === 0 && numBossShips === 0) return;
+    const w = waveState;
+    if (w.bannerTimer > 0) w.bannerTimer--;
+    if (w.mode === 'intermission') {
+        if (--w.timer <= 0) startWave(w.wave + 1);
+    } else if (!enemyShips.some(e => e)) {
+        completeWave();
+    }
+}
+
+window.setWavesEnabled = function(on) {
+    on = !!on;
+    if (on === wavesEnabled) return; // the Streamlit page re-sends settings; stay idempotent
+    wavesEnabled = on;
+    waveState = newWaveState();
+    if (on) {
+        enemyShips = [];             // the wave schedule takes over from the static fleet
+        updateEnemyShipCount();
+        updateBossShipCount();
+    } else {
+        updateEnemyShips();
+        updateBossShips();
+    }
+};
+
+window.setBossPhasePlusEnabled = function(on) { bossPhasePlusEnabled = !!on; };
+
+// Called by EnemyShip.updateBossPhase() when a boss crosses a health threshold.
+function onBossPhaseChange(boss, oldPhase, newPhase) {
+    if (!bossPhasePlusEnabled || newPhase <= oldPhase) return;
+    let text;
+    if (newPhase === 2) {
+        text = 'BOSS PHASE 2 - ESCORTS INBOUND';
+        if (!boss.escortsSummoned) {
+            boss.escortsSummoned = true;
+            for (let i = 0; i < 2 && enemyShips.length < MAX_ENEMIES_ON_FIELD; i++) {
+                const a = boss.angle + (i ? Math.PI * 0.75 : -Math.PI * 0.75);
+                enemyShips.push(new EnemyShip(boss.x + Math.cos(a) * 110, boss.y + Math.sin(a) * 110, 'basic'));
+            }
+            updateEnemyShipCount();
+        }
+    } else {
+        text = 'BOSS PHASE 3 - ENRAGED';
+        if (!boss.enraged) {
+            boss.enraged = true;
+            boss.fireRate = Math.max(8, Math.round(boss.fireRate * 0.65));
+            boss.maxVelocity *= 1.2;
+        }
+    }
+    bossBanner = { text, timer: WAVE_BANNER_FRAMES };
+    if (FXL) {
+        FXL.shake(newPhase === 3 ? 10 : 6, 24);
+        FXL.emitExplosion(boss.x, boss.y, newPhase === 3 ? '#FF1744' : '#FFD600', 3.0);
+    }
+    playBossPhaseSound(newPhase);
+    if (typeof killFeedPush === 'function') killFeedPush(text, newPhase === 3 ? '#FF1744' : '#FFD600');
+}
+
+function drawWaveOverlay() {
+    if (!wavesEnabled || (numEnemyShips === 0 && numBossShips === 0)) return;
+    const w = waveState;
+    const cw = canvas.width, ch = canvas.height;
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    // Persistent badge, top centre.
+    ctx.font = 'bold 14px Arial';
+    ctx.fillStyle = GAME_THEME.primary;
+    const hostiles = enemyShips.filter(e => e).length;
+    ctx.fillText(w.wave === 0 ? 'GET READY' : 'WAVE ' + w.wave + '   -   ' + hostiles + ' hostile' + (hostiles === 1 ? '' : 's'), cw / 2, 18);
+    // Big banner that fades in and out.
+    if (w.bannerTimer > 0) {
+        const t = w.bannerTimer / WAVE_BANNER_FRAMES;
+        const alpha = Math.min(1, t * 4, (1 - t) * 8 + 0.15);
+        ctx.globalAlpha = Math.max(0, alpha);
+        ctx.font = 'bold 46px Arial';
+        ctx.fillStyle = w.spec && w.spec.bosses && w.mode === 'active' ? '#FF3D00' : GAME_THEME.primary;
+        ctx.fillText(w.banner, cw / 2, ch * 0.3);
+        ctx.font = '18px Arial';
+        ctx.fillStyle = GAME_THEME.muted || '#D1D1D1';
+        ctx.fillText(w.subBanner, cw / 2, ch * 0.3 + 38);
+    } else if (w.mode === 'intermission' && w.wave === 0) {
+        ctx.font = 'bold 40px Arial';
+        ctx.globalAlpha = 0.85;
+        ctx.fillStyle = GAME_THEME.primary;
+        ctx.fillText('WAVE 1', cw / 2, ch * 0.3);
+    }
+    ctx.restore();
+}
+
+// Boss health bar with phase pips, shown for the boss closest to dying.
+function drawBossBar() {
+    if (!bossPhasePlusEnabled) return;
+    const bosses = enemyShips.filter(e => e && e.type === 'boss');
+    if (!bosses.length) {
+        if (bossBanner.timer <= 0) return;
+    }
+    const cw = canvas.width;
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    if (bosses.length) {
+        const boss = bosses.reduce((a, b) => (a.health / a.maxHealth <= b.health / b.maxHealth ? a : b));
+        const frac = Math.max(0, boss.health / boss.maxHealth);
+        const barW = Math.min(360, cw * 0.4), barH = 12, x = cw / 2 - barW / 2, y = 52;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        ctx.fillRect(x - 2, y - 2, barW + 4, barH + 4);
+        const phaseColour = boss.bossPhase === 3 ? '#FF1744' : (boss.bossPhase === 2 ? '#FFD600' : '#00E676');
+        ctx.fillStyle = phaseColour;
+        ctx.fillRect(x, y, barW * frac, barH);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+        ctx.lineWidth = 1;
+        for (const mark of [0.3, 0.6]) {          // phase thresholds
+            ctx.beginPath();
+            ctx.moveTo(x + barW * mark, y);
+            ctx.lineTo(x + barW * mark, y + barH);
+            ctx.stroke();
+        }
+        ctx.font = 'bold 11px Arial';
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillText('BOSS  -  PHASE ' + boss.bossPhase + '/3' + (bosses.length > 1 ? '   x' + bosses.length : ''), cw / 2, y - 9);
+    }
+    if (bossBanner.timer > 0) {
+        const t = bossBanner.timer / WAVE_BANNER_FRAMES;
+        ctx.globalAlpha = Math.max(0, Math.min(1, t * 3));
+        ctx.font = 'bold 22px Arial';
+        ctx.fillStyle = bossBanner.text.indexOf('3') >= 0 ? '#FF1744' : '#FFD600';
+        ctx.fillText(bossBanner.text, cw / 2, 88);
+    }
+    ctx.restore();
+}
+
 function update() {
     if (!gameRunning) return;
 
@@ -1988,6 +2289,8 @@ function update() {
         });
         if (collectedPowerUps.size) powerUps = powerUps.filter(p => !collectedPowerUps.has(p));
     }
+
+    updateWaves();
 
     // Update enemy ships
     // COORDINATION: Update coordination system
@@ -2700,6 +3003,8 @@ function drawSphereFrame() {
     if (typeof drawHUD === 'function') drawHUD(ctx);
     drawActiveBuffBadges(ctx);
     drawPauseOverlay();
+    drawWaveOverlay();
+    drawBossBar();
     drawGameOverOverlay();
 }
 
@@ -2813,6 +3118,8 @@ function draw() {
     if (typeof drawHUD === 'function') drawHUD(ctx);
     drawActiveBuffBadges(ctx);
     drawPauseOverlay();
+    drawWaveOverlay();
+    drawBossBar();
     drawGameOverOverlay();
 }
 
