@@ -41,6 +41,8 @@
             <p>Space: Fire / Speed Boost</p>
             <p>H: Hyperspace</p>
             <p>P: Pause</p>
+            <p>M: Toggle music</p>
+            <p>R / Enter: Restart after game over</p>
             <p>T: Toggle Flight Telemetry HUD</p>
         </div>
         <!-- game.js reads/writes these directly (score, best score); kept
@@ -86,7 +88,7 @@
         setHudEnabled(true);
         setActionWheels(true);
         // World: sphere by default; ?world=torus for the flat map.
-        // ?cam=alpha|fleet|orbit and ?zoom=1.4..4.5 tune the sphere camera.
+        // ?cam=alpha|fleet|boss|orbit and ?zoom=1.4..4.5 tune the sphere camera.
         // ?scale=1..3 sets the globe size relative to the screen (default 2).
         (function () {
             const q = new URLSearchParams(location.search);

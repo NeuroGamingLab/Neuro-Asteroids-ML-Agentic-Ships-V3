@@ -110,6 +110,13 @@ if (bestScoreElement) bestScoreElement.textContent = bestScore;
 let audioContext = null;
 let audioContextResumed = false;
 
+// Audio switches: the Streamlit sidebar drives these, and M toggles music
+// in-game. Sound effects and music are separate so either can be muted.
+let sfxEnabled = true;
+let musicEnabled = true;
+window.setSoundEnabled = function(on) { sfxEnabled = !!on; };
+window.setMusicEnabled = function(on) { musicEnabled = !!on; };
+
 // Initialize audio context
 function initAudioContext() {
     if (!audioContext) {
@@ -153,6 +160,7 @@ initAudioContext();
 
 // Sound effects functions
 function playFireSound(isAIBullet = false) {
+    if (!sfxEnabled) return;
     if (!audioContext || !audioContextResumed) {
         // Try to resume if not already resumed
         if (audioContext && audioContext.state === 'suspended') {
@@ -197,6 +205,216 @@ function playFireSound(isAIBullet = false) {
     } catch (e) {
         console.log('Error playing sound:', e);
     }
+}
+
+// Shared noise for every explosion: generated once, reused. A tiny LCG rather
+// than Math.random(), so the audio path never touches the seeded game RNG and
+// stays reproducible.
+let sfxNoiseBuffer = null;
+let lastExplosionAt = -1;
+let lastBossAlertAt = -100;
+
+function playExplosionSound(scale = 1) {
+    if (!sfxEnabled || !audioContext || !audioContextResumed) return;
+    const now = audioContext.currentTime;
+    // A busy swarm can pop several things in one frame; thin them out so the
+    // mix stays readable instead of turning into a wall of noise.
+    if (now - lastExplosionAt < 0.07) return;
+    lastExplosionAt = now;
+    try {
+        if (!sfxNoiseBuffer) {
+            const len = Math.floor(audioContext.sampleRate * 1.2);
+            sfxNoiseBuffer = audioContext.createBuffer(1, len, audioContext.sampleRate);
+            const data = sfxNoiseBuffer.getChannelData(0);
+            let seed = 12345;
+            for (let i = 0; i < len; i++) {
+                seed = (seed * 1664525 + 1013904223) >>> 0;
+                data[i] = seed / 2147483648 - 1;
+            }
+        }
+        const dur = Math.min(1.1, 0.22 + 0.22 * scale);
+        const peak = Math.min(0.3, 0.07 + 0.05 * scale);
+        const src = audioContext.createBufferSource();
+        src.buffer = sfxNoiseBuffer;
+        const filter = audioContext.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(Math.min(3200, 1400 + 600 * scale), now);
+        filter.frequency.exponentialRampToValueAtTime(90, now + dur);
+        const gain = audioContext.createGain();
+        gain.gain.setValueAtTime(peak, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+        src.connect(filter); filter.connect(gain); gain.connect(audioContext.destination);
+        src.start(now); src.stop(now + dur + 0.05);
+        src.onended = () => { src.disconnect(); filter.disconnect(); gain.disconnect(); };
+        if (scale >= 2) {
+            // Bosses and big blasts get a low thump under the noise.
+            const osc = audioContext.createOscillator();
+            const og = audioContext.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(110, now);
+            osc.frequency.exponentialRampToValueAtTime(38, now + dur);
+            og.gain.setValueAtTime(peak * 1.2, now);
+            og.gain.exponentialRampToValueAtTime(0.001, now + dur);
+            osc.connect(og); og.connect(audioContext.destination);
+            osc.start(now); osc.stop(now + dur + 0.05);
+            osc.onended = () => { osc.disconnect(); og.disconnect(); };
+        }
+    } catch (e) {
+        console.log('Error playing explosion sound:', e);
+    }
+}
+
+// Two-tone siren when a boss spawns. Rate-limited: bosses spawn in batches.
+function playBossAlert() {
+    if (!sfxEnabled || !audioContext || !audioContextResumed) return;
+    const now = audioContext.currentTime;
+    if (now - lastBossAlertAt < 6) return;
+    lastBossAlertAt = now;
+    try {
+        const osc = audioContext.createOscillator();
+        const filter = audioContext.createBiquadFilter();
+        const gain = audioContext.createGain();
+        osc.type = 'sawtooth';
+        filter.type = 'lowpass';
+        filter.frequency.value = 900;
+        for (let i = 0; i < 4; i++) osc.frequency.setValueAtTime(i % 2 ? 330 : 440, now + i * 0.22);
+        gain.gain.setValueAtTime(0, now);
+        gain.gain.linearRampToValueAtTime(0.1, now + 0.03);
+        gain.gain.setValueAtTime(0.1, now + 0.8);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.95);
+        osc.connect(filter); filter.connect(gain); gain.connect(audioContext.destination);
+        osc.start(now); osc.stop(now + 1.0);
+        osc.onended = () => { osc.disconnect(); filter.disconnect(); gain.disconnect(); };
+    } catch (e) {
+        console.log('Error playing boss alert:', e);
+    }
+}
+
+// Falling tone for the game-over screen.
+function playGameOverSound() {
+    if (!sfxEnabled || !audioContext || !audioContextResumed) return;
+    const now = audioContext.currentTime;
+    try {
+        const osc = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(330, now);
+        osc.frequency.exponentialRampToValueAtTime(82, now + 1.1);
+        gain.gain.setValueAtTime(0.16, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 1.2);
+        osc.connect(gain); gain.connect(audioContext.destination);
+        osc.start(now); osc.stop(now + 1.25);
+        osc.onended = () => { osc.disconnect(); gain.disconnect(); };
+    } catch (e) {
+        console.log('Error playing game-over sound:', e);
+    }
+}
+
+// Short rising two-note chime for collecting a power-up.
+function playPickupSound() {
+    if (!sfxEnabled || !audioContext || !audioContextResumed) return;
+    const now = audioContext.currentTime;
+    try {
+        [660, 880].forEach((freq, i) => {
+            const t = now + i * 0.07;
+            const osc = audioContext.createOscillator();
+            const gain = audioContext.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(freq, t);
+            gain.gain.setValueAtTime(0, t);
+            gain.gain.linearRampToValueAtTime(0.12, t + 0.01);
+            gain.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+            osc.connect(gain); gain.connect(audioContext.destination);
+            osc.start(t); osc.stop(t + 0.16);
+            osc.onended = () => { osc.disconnect(); gain.disconnect(); };
+        });
+    } catch (e) {
+        console.log('Error playing pickup sound:', e);
+    }
+}
+
+// Ambient music: a slow low drone (two sine/triangle pairs under a gently
+// sweeping low-pass) plus a sparse, quiet pentatonic note every couple of
+// seconds. Entirely synthesized, so there is no audio asset to ship or load.
+let musicNodes = null;
+
+function startMusic() {
+    try {
+        const now = audioContext.currentTime;
+        const master = audioContext.createGain();
+        master.gain.setValueAtTime(0, now);
+        master.gain.linearRampToValueAtTime(0.055, now + 3);
+        const filter = audioContext.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.value = 900;
+        filter.connect(master);
+        master.connect(audioContext.destination);
+
+        const oscs = [55, 82.41, 110, 164.81].map((freq, i) => {
+            const o = audioContext.createOscillator();
+            const g = audioContext.createGain();
+            o.type = i % 2 ? 'triangle' : 'sine';
+            o.frequency.value = freq;
+            o.detune.value = (i - 1.5) * 6;
+            g.gain.value = 0.25;
+            o.connect(g); g.connect(filter);
+            o.start();
+            return o;
+        });
+
+        const lfo = audioContext.createOscillator();
+        const lfoGain = audioContext.createGain();
+        lfo.frequency.value = 0.07;
+        lfoGain.gain.value = 350;
+        lfo.connect(lfoGain); lfoGain.connect(filter.frequency);
+        lfo.start();
+
+        const scale = [220, 246.94, 277.18, 329.63, 369.99, 440];
+        const timer = setInterval(() => {
+            if (!musicNodes || !audioContext) return;
+            const t = audioContext.currentTime;
+            const o = audioContext.createOscillator();
+            const g = audioContext.createGain();
+            o.type = 'sine';
+            o.frequency.value = scale[Math.floor(Math.random() * scale.length)] * (Math.random() < 0.3 ? 2 : 1);
+            g.gain.setValueAtTime(0, t);
+            g.gain.linearRampToValueAtTime(0.5, t + 0.4);
+            g.gain.exponentialRampToValueAtTime(0.001, t + 3);
+            o.connect(g); g.connect(filter);
+            o.start(t); o.stop(t + 3.1);
+            o.onended = () => { o.disconnect(); g.disconnect(); };
+        }, 2200);
+
+        musicNodes = { master, filter, oscs: oscs.concat([lfo]), timer };
+    } catch (e) {
+        console.log('Error starting music:', e);
+        musicNodes = null;
+    }
+}
+
+function stopMusic() {
+    if (!musicNodes) return;
+    const nodes = musicNodes;
+    musicNodes = null;
+    clearInterval(nodes.timer);
+    try {
+        const now = audioContext.currentTime;
+        nodes.master.gain.cancelScheduledValues(now);
+        nodes.master.gain.setValueAtTime(nodes.master.gain.value, now);
+        nodes.master.gain.linearRampToValueAtTime(0, now + 0.5);
+    } catch (e) { /* context may already be closed */ }
+    setTimeout(() => {
+        nodes.oscs.forEach(o => { try { o.stop(); o.disconnect(); } catch (e) {} });
+        try { nodes.filter.disconnect(); nodes.master.disconnect(); } catch (e) {}
+    }, 600);
+}
+
+// Called every frame: starts or stops the drone to match the toggle and the
+// browser's audio-unlock state (nothing may play before a user gesture).
+function syncMusic() {
+    const want = musicEnabled && audioContext && audioContextResumed;
+    if (want && !musicNodes) startMusic();
+    else if (!want && musicNodes) stopMusic();
 }
 
 // Set canvas size
@@ -301,6 +519,32 @@ let playerShipActive = true; // Player ship active state
 let gamePaused = false;
 function togglePause() {
     gamePaused = !gamePaused;
+}
+
+// Game over: a non-blocking overlay instead of a blocking alert(). The old
+// alert() froze the whole tab (and the animation loop with it) until it was
+// dismissed, and left the game running behind a dialog the user could not see
+// past. Now the simulation just stops, the frozen scene stays visible behind
+// a score card, and the next run starts on R/Enter or after a few seconds.
+// Headless training/test harnesses (which stub alert() as a no-op and expect
+// the world to reset immediately) keep that behaviour.
+// Swings the sphere camera over to a boss kill (SphereView rate-limits this and
+// ignores it unless the kill-cam is enabled and the sphere view is active).
+function onBossKilled(boss) {
+    if (typeof SphereView !== 'undefined' && sphereViewReady()) SphereView.killCam(boss.x, boss.y, 90);
+}
+
+let gameOverState = null; // { score, best, newBest, frames } while the card is up
+const GAME_OVER_AUTO_RESTART_FRAMES = 300;
+
+function triggerGameOver() {
+    if (typeof globalThis !== 'undefined' && globalThis.__HEADLESS__) {
+        initGame();
+        gameRunning = true;
+        return;
+    }
+    gameOverState = { score, best: bestScore, newBest: score > 0 && score >= bestScore, frames: 0 };
+    playGameOverSound();
 }
 
 // Episode bookkeeping. Collected training samples are useless without these:
@@ -988,6 +1232,7 @@ function initGame(seed) {
 // Spawn enemy ship
 function spawnEnemyShip(type = 'basic') {
     enemyShips.push(new EnemyShip(null, null, type));
+    if (type === 'boss') playBossAlert();
 }
 
 // Spawn enemy ships periodically
@@ -1422,12 +1667,27 @@ function checkCollision(obj1, obj2) {
 function update() {
     if (!gameRunning) return;
 
+    syncMusic();
     // Edge-triggered so holding the key doesn't toggle every frame.
     if (keys['p']) {
         togglePause();
         keys['p'] = false;
     }
+    if (keys['m']) {
+        musicEnabled = !musicEnabled;
+        keys['m'] = false;
+    }
     if (gamePaused) return;
+
+    if (gameOverState) {
+        gameOverState.frames++;
+        const wantsRestart = keys['r'] || keys['enter'];
+        if (gameOverState.frames > 30 && (wantsRestart || gameOverState.frames > GAME_OVER_AUTO_RESTART_FRAMES)) {
+            gameOverState = null;
+            initGame();
+        }
+        return;
+    }
 
     episodeStepCount++;
 
@@ -1603,6 +1863,7 @@ function update() {
                         if (typeof killFeedPush === 'function') killFeedPush('⛽ FLEET EMERGENCY FUEL RESTORED!', '#FF0077');
                     }
                     if (FXL) FXL.emitExplosion(p.x, p.y, p.color, 1.2);
+                    playPickupSound();
                     score += 150;
                     updateScore();
                     break;
@@ -1770,6 +2031,7 @@ function triggerEMPBlast(x, y) {
         FXL.shake(8, 25);
         FXL.emitExplosion(x, y, '#FFD600', 4.0);
     }
+    playExplosionSound(4);
     // Clear all enemy bullets within 400px
     enemyBullets = enemyBullets.filter(b => Math.hypot(b.x - x, b.y - y) > 400);
     // Stun all enemy ships for 4 seconds
@@ -1808,8 +2070,10 @@ function triggerEMPBlast(x, y) {
                         subsystemHit = true;
                         sub.health--;
                         if (FXL) FXL.emitExplosion(subPos.x, subPos.y, sub.color, 0.7);
+                        playExplosionSound(0.5);
                         if (sub.health <= 0) {
                             sub.destroyed = true;
+                            playExplosionSound(2.4);
                             if (FXL) {
                                 FXL.emitExplosion(subPos.x, subPos.y, sub.color, 2.5);
                                 FXL.shake(4, 14);
@@ -1871,6 +2135,8 @@ function triggerEMPBlast(x, y) {
                     FXL.emitExplosion(enemyShip.x, enemyShip.y, GAME_THEME.enemy, isBoss ? 3 : 1);
                     if (isBoss) FXL.shake(7, 22); else FXL.shake(2, 6);
                 }
+                playExplosionSound(enemyShip.type === 'boss' ? 3 : 1);
+                if (enemyShip.type === 'boss') onBossKilled(enemyShip);
                 score += killValue;
                 creditAgent(bullet.ownerAgentId, enemyShip.type === 'boss' ? 'bossKills' : 'enemyKills', 1);
                 creditAgent(bullet.ownerAgentId, 'scoreEarned', killValue);
@@ -1903,10 +2169,8 @@ function triggerEMPBlast(x, y) {
     if (playerShipActive) {
         const hitByEnemyBullet = enemyBullets.some(bullet => checkCollision(bullet, ship));
         if (hitByEnemyBullet) {
-            gameRunning = false;
-            alert('Game Over! Final Score: ' + score);
-            initGame();
-            gameRunning = true;
+            triggerGameOver();
+            return;
         }
     }
 
@@ -1948,6 +2212,7 @@ function triggerEMPBlast(x, y) {
                         if (isFuelLinked(aiShip)) clearFuelLink(aiShip, aiShip.fuelTransferPartner);
                         aiShips.splice(aiIndex, 1);
                         if (FXL) { FXL.emitExplosion(aiShip.x, aiShip.y, GAME_THEME.aiBlue, 1.2); FXL.shake(3, 10); }
+                        playExplosionSound(1.2);
                         if (typeof killFeedPush === 'function') {
                             const name = aiShip.isAlpha ? '★ Alpha' : (aiShip.role ? aiShip.role : 'Unit');
                             killFeedPush(`✦ ${name} destroyed`, '#66AAFF');
@@ -2003,6 +2268,7 @@ function triggerEMPBlast(x, y) {
             if (isSmall)  tileScore = 200;
 
             if (FXL) FXL.emitDebris(asteroid.x, asteroid.y, asteroid.radius);
+            playExplosionSound(isSmall ? 0.3 : isMedium ? 0.5 : 0.7);
             score += tileScore;
             creditAgent(bullet.ownerAgentId, 'asteroidKills', 1);
             creditAgent(bullet.ownerAgentId, 'scoreEarned', tileScore);
@@ -2042,15 +2308,10 @@ function triggerEMPBlast(x, y) {
 
     // Check player ship-asteroid collisions (only if shield is not active and ship is active)
     if (playerShipActive && !ship.shieldActive) {
-        asteroids.forEach((asteroid, index) => {
-            if (checkCollision(ship, asteroid)) {
-                // Game over or reset
-                gameRunning = false;
-                alert('Game Over! Final Score: ' + score);
-                initGame();
-                gameRunning = true;
-            }
-        });
+        if (asteroids.some(asteroid => checkCollision(ship, asteroid))) {
+            triggerGameOver();
+            return;
+        }
     }
 
     // Check enemy ships vs asteroids
@@ -2089,6 +2350,8 @@ function triggerEMPBlast(x, y) {
             // No shield or shield inactive - enemy ship destroyed
             enemyShipsDestroyedByAsteroids.add(enemyShip);
             if (FXL) FXL.emitExplosion(enemyShip.x, enemyShip.y, GAME_THEME.enemy, enemyShip.type === 'boss' ? 3 : 1);
+            playExplosionSound(enemyShip.type === 'boss' ? 3 : 1);
+            if (enemyShip.type === 'boss') onBossKilled(enemyShip);
             break;
         }
     });
@@ -2114,6 +2377,7 @@ function triggerEMPBlast(x, y) {
                     if (FXL) {
                         FXL.emitExplosion(aiShip.x, aiShip.y, GAME_THEME.fuelTransfer, 2.2);
                         FXL.emitExplosion(partner.x, partner.y, GAME_THEME.gold, 2.2);
+                        playExplosionSound(2.4);
                         FXL.shake(9, 28);
                     }
                     clearFuelLink(aiShip, partner);
@@ -2148,6 +2412,7 @@ function triggerEMPBlast(x, y) {
                 if (aiShip.health <= 0) {
                     // AI ship destroyed - remove it permanently
                     if (FXL) { FXL.emitExplosion(aiShip.x, aiShip.y, GAME_THEME.aiBlue, 1.2); FXL.shake(3, 10); }
+                    playExplosionSound(1.2);
                     if (typeof killFeedPush === 'function') {
                         const name = aiShip.isAlpha ? '★ Alpha' : (aiShip.role ? aiShip.role : 'Unit');
                         killFeedPush(`☄ ${name} hit by asteroid`, '#FF9944');
@@ -2271,6 +2536,33 @@ function drawEnemyCoordinationVisuals(enemyShips) {
     }
 }
 
+function drawGameOverOverlay() {
+    if (!gameOverState) return;
+    const g = gameOverState;
+    const w = canvas.width, h = canvas.height;
+    const fade = Math.min(1, g.frames / 20);
+    ctx.save();
+    ctx.globalAlpha = fade;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.68)';
+    ctx.fillRect(0, 0, w, h);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = GAME_THEME.enemy;
+    ctx.font = 'bold 54px Arial';
+    ctx.fillText('GAME OVER', w / 2, h / 2 - 64);
+    ctx.fillStyle = GAME_THEME.primary;
+    ctx.font = 'bold 26px Arial';
+    ctx.fillText('Score  ' + g.score, w / 2, h / 2 - 12);
+    ctx.font = '18px Arial';
+    ctx.fillStyle = g.newBest ? '#FFD700' : (GAME_THEME.muted || '#D1D1D1');
+    ctx.fillText(g.newBest ? 'NEW BEST!' : 'Best  ' + g.best, w / 2, h / 2 + 24);
+    const secs = Math.max(0, Math.ceil((GAME_OVER_AUTO_RESTART_FRAMES - g.frames) / 60));
+    ctx.font = '15px Arial';
+    ctx.fillStyle = GAME_THEME.primary;
+    ctx.fillText('Press R or Enter to restart  -  auto-restart in ' + secs + 's', w / 2, h / 2 + 62);
+    ctx.restore();
+}
+
 function drawPauseOverlay() {
     if (!gamePaused) return;
     ctx.save();
@@ -2310,6 +2602,7 @@ function drawSphereFrame() {
     if (typeof drawHUD === 'function') drawHUD(ctx);
     drawActiveBuffBadges(ctx);
     drawPauseOverlay();
+    drawGameOverOverlay();
 }
 
 function draw() {
@@ -2422,6 +2715,7 @@ function draw() {
     if (typeof drawHUD === 'function') drawHUD(ctx);
     drawActiveBuffBadges(ctx);
     drawPauseOverlay();
+    drawGameOverOverlay();
 }
 
 function drawActiveBuffBadges(ctx) {

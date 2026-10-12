@@ -188,6 +188,7 @@ DEFAULTS = {
     "trained_policy_deterministic": True, "policy_overlay": True,
     "policy_worker": True, "value_heatmap": True, "action_wheels": True,
     "fx_enabled": True, "hud_enabled": True,
+    "sfx_enabled": True, "music_enabled": True, "kill_cam_enabled": True,
     "world_mode": "Sphere (3D)", "sphere_camera": "Follow Alpha", "sphere_zoom": 4.2, "world_scale": 2.0,
 }
 
@@ -270,7 +271,7 @@ with st.sidebar:
                                               "the surface: ships, asteroids and bullets keep their size and speed, so there is "
                                               "more room and longer engagement distances. Fuel endurance and spawn clearances "
                                               "scale with it; PPO policies trained at 1x will be off-distribution."))
-                sphere_camera = st.selectbox("Camera", ["Follow Alpha", "Follow fleet", "Slow orbit"], key="sphere_camera",
+                sphere_camera = st.selectbox("Camera", ["Follow Alpha", "Follow fleet", "Follow boss", "Slow orbit"], key="sphere_camera",
                                              help="Follow keeps the target under the camera with local north up.")
                 sphere_zoom = st.slider("Distance", 1.4, 4.5, step=0.1, key="sphere_zoom",
                                         help=("Camera height above the surface, in radii of the 1x globe. Ships keep the same "
@@ -439,6 +440,14 @@ with st.sidebar:
                                help="Thruster trails, debris, explosions, dock plasma stream, HELP ripple.")
         hud_enabled = st.toggle("Live telemetry HUD", key="hud_enabled",
                                 help="Sparklines: score rate, ships alive, Alpha fuel, threat, policy value / entropy.")
+        kill_cam_enabled = st.toggle("Kill-cam on boss kills", key="kill_cam_enabled",
+                                     help=("Sphere world only: the camera swings to a boss kill and pulls in for a "
+                                           "moment, then returns. At most once every ten seconds."))
+        st.caption("Audio (browsers only allow sound after your first click or key press):")
+        sfx_enabled = st.toggle("Sound effects", key="sfx_enabled",
+                                help="Gunfire, explosions, power-up chime, boss-spawn siren, game-over tone.")
+        music_enabled = st.toggle("Ambient music", key="music_enabled",
+                                  help="Quiet generative drone. Press M in the game to mute or unmute it.")
         st.caption("Policy overlays (need a trained policy driving the ships):")
         policy_overlay = st.toggle("Decision text overlay", key="policy_overlay",
                                    help="Chosen action, confidence, entropy and value next to each ship.")
@@ -460,7 +469,7 @@ def read_source(path, fallback_comment=None):
         return f"// {fallback_comment or path + ' not found'}\n"
 
 
-def get_game_html(num_ai_ships, num_enemy_ships, num_boss_ships, canvas_width, canvas_height, player_ship_active, ml_enabled, ml_mode="parameters", marl_enabled=False, marl_training=False, alpha_attack_enabled=False, formation_type="arrowhead", auto_assign_roles=True, fuel_rescue_enabled=True, adaptive_formation=False, multi_target_mode="focus", escort_mode="none", tactical_sequences=True, formation_transitions=True, advanced_flanking=True, ml_data_collection=False, ml_hierarchy_enabled=False, ml_evaluation_enabled=False, curriculum_stage=3, nn_models_enabled=False, model_version="1.0.0", multitask_model_path="none", parameter_model_path="none", priority_model_path="none", action_model_path="none", prefer_wasm=True, trained_policy_path="none", trained_policy_enabled=False, trained_policy_deterministic=False, policy_overlay=False, policy_worker=False, value_heatmap=False, action_wheels=False, fx_enabled=True, hud_enabled=True, world_mode="torus", sphere_camera="alpha", sphere_zoom=2.6, world_scale=1.0, telemetry_rate=10):
+def get_game_html(num_ai_ships, num_enemy_ships, num_boss_ships, canvas_width, canvas_height, player_ship_active, ml_enabled, ml_mode="parameters", marl_enabled=False, marl_training=False, alpha_attack_enabled=False, formation_type="arrowhead", auto_assign_roles=True, fuel_rescue_enabled=True, adaptive_formation=False, multi_target_mode="focus", escort_mode="none", tactical_sequences=True, formation_transitions=True, advanced_flanking=True, ml_data_collection=False, ml_hierarchy_enabled=False, ml_evaluation_enabled=False, curriculum_stage=3, nn_models_enabled=False, model_version="1.0.0", multitask_model_path="none", parameter_model_path="none", priority_model_path="none", action_model_path="none", prefer_wasm=True, trained_policy_path="none", trained_policy_enabled=False, trained_policy_deterministic=False, policy_overlay=False, policy_worker=False, value_heatmap=False, action_wheels=False, fx_enabled=True, hud_enabled=True, world_mode="torus", sphere_camera="alpha", sphere_zoom=2.6, world_scale=1.0, telemetry_rate=10, sfx_enabled=True, music_enabled=True, kill_cam_enabled=True):
     # rng.js must be first: game.js calls gameRandom() and resolves it lexically,
     # so loading it later leaves the game with an undefined RNG.
     rng_js = read_source('rng.js', 'rng.js not found - game.js will fail to start')
@@ -703,6 +712,7 @@ def get_game_html(num_ai_ships, num_enemy_ships, num_boss_ships, canvas_width, c
                 <p>F: Shield Force</p>
                 <p>H: Hyperspace</p>
                 <p>P: Pause</p>
+                <p>M: Toggle music</p>
                 <p>ESC: Toggle Fullscreen</p>
                 <br>
                 <p class="credit-line">
@@ -725,6 +735,8 @@ def get_game_html(num_ai_ships, num_enemy_ships, num_boss_ships, canvas_width, c
         (function() {{
             if (typeof setFxEnabled === 'function') setFxEnabled({str(fx_enabled).lower()});
             if (typeof setHudEnabled === 'function') setHudEnabled({str(hud_enabled).lower()});
+            if (typeof setSoundEnabled === 'function') setSoundEnabled({str(sfx_enabled).lower()});
+            if (typeof setMusicEnabled === 'function') setMusicEnabled({str(music_enabled).lower()});
             if (typeof setValueHeatmap === 'function') setValueHeatmap({str(value_heatmap).lower()});
             if (typeof setActionWheels === 'function') setActionWheels({str(action_wheels).lower()});
             if (typeof AsteroidsTelemetry !== 'undefined' && AsteroidsTelemetry.setBroadcastInterval) {{
@@ -744,6 +756,7 @@ def get_game_html(num_ai_ships, num_enemy_ships, num_boss_ships, canvas_width, c
             if (sphere && typeof SphereView !== 'undefined') {{
                 SphereView.setCamera({js_string(sphere_camera)});
                 SphereView.setZoom({float(sphere_zoom)});
+                if (SphereView.setKillCamEnabled) SphereView.setKillCamEnabled({str(kill_cam_enabled).lower()});
                 if (!SphereView.ready()) console.warn('[Sphere] Three.js renderer unavailable; showing the sphere as a flat map');
             }}
             console.log('[World] mode=' + (ok ? 'sphere' : 'torus') + (ok ? ' scale=' + WORLD.getScale() + ' R=' + WORLD.radius().toFixed(1) : ''));
@@ -1125,9 +1138,11 @@ game_html = get_game_html(num_ai_ships, num_enemy_ships, num_boss_ships, canvas_
                           policy_worker=policy_worker, value_heatmap=value_heatmap, action_wheels=action_wheels,
                           fx_enabled=fx_enabled, hud_enabled=hud_enabled,
                           world_mode="sphere" if world_mode.startswith("Sphere") else "torus",
-                          sphere_camera={"Follow Alpha": "alpha", "Follow fleet": "fleet", "Slow orbit": "orbit"}.get(sphere_camera, "alpha"),
+                          sphere_camera={"Follow Alpha": "alpha", "Follow fleet": "fleet", "Follow boss": "boss", "Slow orbit": "orbit"}.get(sphere_camera, "alpha"),
                           sphere_zoom=sphere_zoom, world_scale=world_scale,
-                          telemetry_rate=telemetry_rate)
+                          telemetry_rate=telemetry_rate,
+                          sfx_enabled=sfx_enabled, music_enabled=music_enabled,
+                          kill_cam_enabled=kill_cam_enabled)
 # Adjust component dimensions to match canvas + UI elements
 # Height: canvas height + status bar (~40px) + mission control bar (~50px) + controls section (~160px) + padding (~20px)
 component_height = canvas_height + 270
