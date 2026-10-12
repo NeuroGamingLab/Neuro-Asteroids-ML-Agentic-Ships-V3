@@ -1,3 +1,98 @@
+// game.js - game loop, input, rules and the headless training hooks.
+//
+// Everything below runs inside one function scope, so its ~150 top-level names no
+// longer leak into the global scope where any script could read or overwrite them
+// by accident. The deliberate public surface is declared once, here, and is derived
+// from what the other scripts (entities, ai_ship, enemy_ship, the HUD, the sphere
+// view, the RL environment, the tests) actually use.
+//
+// Shared mutable state is exposed through accessor properties rather than copied
+// values: other files keep reading and assigning bare `aiShips`, `score`,
+// `numAIShips` and so on, and the accessors forward to the one real variable. They
+// are installed before any other code in this file runs because initGame() at the
+// bottom calls back into scripts that read these names.
+(function (root) {
+    // ---- public surface ------------------------------------------------------
+    const publicState = {
+        canvas: [() => canvas],
+        ctx: [() => ctx, (value) => { ctx = value; }],
+        WORLD_GEO: [() => WORLD_GEO],
+        bestScore: [() => bestScore, (value) => { bestScore = value; }],
+        score: [() => score, (value) => { score = value; }],
+        gameRunning: [() => gameRunning, (value) => { gameRunning = value; }],
+        playerShipActive: [() => playerShipActive, (value) => { playerShipActive = value; }],
+        episodeStepCount: [() => episodeStepCount, (value) => { episodeStepCount = value; }],
+        episodeId: [() => episodeId, (value) => { episodeId = value; }],
+        episodeDone: [() => episodeDone, (value) => { episodeDone = value; }],
+        fuelEvents: [() => fuelEvents, (value) => { fuelEvents = value; }],
+        policyControlEnabled: [() => policyControlEnabled, (value) => { policyControlEnabled = value; }],
+        FIRE_FORWARD: [() => FIRE_FORWARD],
+        FIRE_AT_ASTEROID: [() => FIRE_AT_ASTEROID],
+        FIRE_AT_ENEMY: [() => FIRE_AT_ENEMY],
+        ACTION_SPACE_SIZE: [() => ACTION_SPACE_SIZE],
+        expertActionRecording: [() => expertActionRecording, (value) => { expertActionRecording = value; }],
+        FXL: [() => FXL],
+        mlGlobalFrame: [() => mlGlobalFrame, (value) => { mlGlobalFrame = value; }],
+        mlUseNeuralNetwork: [() => mlUseNeuralNetwork, (value) => { mlUseNeuralNetwork = value; }],
+        mlDataCollectionEnabled: [() => mlDataCollectionEnabled, (value) => { mlDataCollectionEnabled = value; }],
+        ship: [() => ship],
+        aiShips: [() => aiShips, (value) => { aiShips = value; }],
+        bullets: [() => bullets, (value) => { bullets = value; }],
+        enemyBullets: [() => enemyBullets, (value) => { enemyBullets = value; }],
+        enemyShips: [() => enemyShips, (value) => { enemyShips = value; }],
+        powerUps: [() => powerUps, (value) => { powerUps = value; }],
+        asteroids: [() => asteroids, (value) => { asteroids = value; }],
+        numAIShips: [() => numAIShips, (value) => { numAIShips = value; }],
+        numEnemyShips: [() => numEnemyShips, (value) => { numEnemyShips = value; }],
+        numBossShips: [() => numBossShips, (value) => { numBossShips = value; }],
+        alphaAttackEnabled: [() => alphaAttackEnabled, (value) => { alphaAttackEnabled = value; }],
+        formationType: [() => formationType, (value) => { formationType = value; }],
+        autoAssignRoles: [() => autoAssignRoles, (value) => { autoAssignRoles = value; }],
+        adaptiveFormationEnabled: [() => adaptiveFormationEnabled, (value) => { adaptiveFormationEnabled = value; }],
+        multiTargetMode: [() => multiTargetMode, (value) => { multiTargetMode = value; }],
+        escortMode: [() => escortMode, (value) => { escortMode = value; }],
+        tacticalAttackSequencesEnabled: [() => tacticalAttackSequencesEnabled, (value) => { tacticalAttackSequencesEnabled = value; }],
+        dynamicFormationTransitionsEnabled: [() => dynamicFormationTransitionsEnabled, (value) => { dynamicFormationTransitionsEnabled = value; }],
+        advancedFlankingEnabled: [() => advancedFlankingEnabled, (value) => { advancedFlankingEnabled = value; }],
+        fuelRescueEnabled: [() => fuelRescueEnabled, (value) => { fuelRescueEnabled = value; }],
+        fuelRescueDispatchCooldown: [() => fuelRescueDispatchCooldown, (value) => { fuelRescueDispatchCooldown = value; }],
+    };
+    for (const name of Object.keys(publicState)) {
+        const [get, set] = publicState[name];
+        Object.defineProperty(root, name, { get, set, configurable: true, enumerable: false });
+    }
+
+    // Functions are hoisted, so these are valid before their declarations run.
+    root.sphereWorld = sphereWorld;
+    root.worldW = worldW;
+    root.worldH = worldH;
+    root.worldScale = worldScale;
+    root.setWorldScale = setWorldScale;
+    root.setWorldMode = setWorldMode;
+    root.worldToScreen = worldToScreen;
+    root.playFireSound = playFireSound;
+    root.exitFullscreen = exitFullscreen;
+    root.consumeAgentCredit = consumeAgentCredit;
+    root.consumeFuelEvents = consumeFuelEvents;
+    root.decodeAction = decodeAction;
+    root.encodeAction = encodeAction;
+    root.setPolicyControl = setPolicyControl;
+    root.setPolicyOverlay = setPolicyOverlay;
+    root.setExpertActionRecording = setExpertActionRecording;
+    root.readExpertActions = readExpertActions;
+    root.updateAlphaHelpPing = updateAlphaHelpPing;
+    root.ensureAlphaAssignment = ensureAlphaAssignment;
+    root.getAlphaCombatWingmen = getAlphaCombatWingmen;
+    root.assignFuelShipRole = assignFuelShipRole;
+    root.initGame = initGame;
+    root.setupTouchControls = setupTouchControls;
+    root.update = update;
+    root.triggerEMPBlast = triggerEMPBlast;
+    root.draw = draw;
+    root.updateScore = updateScore;
+    root.updateAIShipCount = updateAIShipCount;
+
+    // ---- game ----------------------------------------------------------------
 // Game Canvas Setup
 const canvas = document.getElementById('gameCanvas');
 // Try to get hardware-accelerated 2D context, fallback to regular 2D
@@ -635,9 +730,7 @@ const ACTION_SPACE_SIZE = 48;
 // A top-level `const` lives in the global lexical environment rather than on
 // globalThis, so without this assignment policy_runner.js sees `undefined` and
 // cannot tell a stale 24-action checkpoint from a current 48-action one.
-if (typeof globalThis !== 'undefined') {
-    globalThis.ACTION_SPACE_SIZE = ACTION_SPACE_SIZE;
-}
+// ACTION_SPACE_SIZE is part of the public surface declared at the top of this file.
 
 function decodeAction(index) {
     const i = Math.max(0, Math.min(ACTION_SPACE_SIZE - 1, index | 0));
@@ -1664,6 +1757,29 @@ function checkCollision(obj1, obj2) {
 }
 
 // Update game state
+// Satellite / pickup EMP: clears nearby enemy fire and stuns the enemy fleet.
+// Declared at top level so Mission Control's DETONATE EMP button (hud.js) can reach
+// it; it used to be nested inside update(), where that button's typeof check
+// always failed and the click silently did nothing.
+function triggerEMPBlast(x, y) {
+    if (FXL) {
+        FXL.shake(8, 25);
+        FXL.emitExplosion(x, y, '#FFD600', 4.0);
+    }
+    playExplosionSound(4);
+    // Clear all enemy bullets within 400px
+    enemyBullets = enemyBullets.filter(b => Math.hypot(b.x - x, b.y - y) > 400);
+    // Stun all enemy ships for 4 seconds
+    enemyShips.forEach(e => {
+        if (!e) return;
+        e.stunTimer = 240;
+        if (FXL) FXL.emitDebris(e.x, e.y, e.size);
+    });
+    if (typeof killFeedPush === 'function') {
+        killFeedPush('💥 EMP SHOCKWAVE DISCHARGED!', '#FFD600');
+    }
+}
+
 function update() {
     if (!gameRunning) return;
 
@@ -2026,24 +2142,6 @@ function update() {
         });
     }
 
-function triggerEMPBlast(x, y) {
-    if (FXL) {
-        FXL.shake(8, 25);
-        FXL.emitExplosion(x, y, '#FFD600', 4.0);
-    }
-    playExplosionSound(4);
-    // Clear all enemy bullets within 400px
-    enemyBullets = enemyBullets.filter(b => Math.hypot(b.x - x, b.y - y) > 400);
-    // Stun all enemy ships for 4 seconds
-    enemyShips.forEach(e => {
-        if (!e) return;
-        e.stunTimer = 240;
-        if (FXL) FXL.emitDebris(e.x, e.y, e.size);
-    });
-    if (typeof killFeedPush === 'function') {
-        killFeedPush('💥 EMP SHOCKWAVE DISCHARGED!', '#FFD600');
-    }
-}
 
     // Check bullets (player and AI) vs enemy ships
     //
@@ -2962,4 +3060,4 @@ if (typeof setPlayerShipActive === 'function') {
 }
 
 gameLoop();
-
+})(typeof globalThis !== 'undefined' ? globalThis : this);

@@ -1,0 +1,91 @@
+<!doctype html>
+<!-- Self-checking browser smoke test. Loaded by tests/run_browser_smoke.py in
+     headless Chrome; it opens the real index.html in an iframe, drives the game
+     loop by hand, and writes a JSON verdict into #smoke-result for the runner. -->
+<meta charset="utf-8">
+<title>smoke</title>
+<iframe id="game" width="1300" height="900" style="border:0"></iframe>
+<pre id="smoke-result">pending</pre>
+<script>
+const results = [];
+function check(name, ok, detail) { results.push({ name, ok: !!ok, detail: detail === undefined ? '' : String(detail) }); }
+
+function finish() {
+    document.getElementById('smoke-result').textContent =
+        JSON.stringify({ done: true, failed: results.filter(r => !r.ok).length, results });
+}
+
+const wait = ms => new Promise(r => setTimeout(r, ms));
+const frame = document.getElementById('game');
+const query = new URLSearchParams(location.search);
+
+frame.addEventListener('load', async () => {
+    try {
+        await wait(800);
+        const cw = frame.contentWindow;
+        const run = code => cw.eval(code);
+        check('page exposes the game loop', typeof cw.update === 'function' && typeof cw.draw === 'function');
+        check('canvas present', !!cw.document.getElementById('gameCanvas'));
+        check('three.js loaded for the globe', typeof cw.THREE !== 'undefined', 'sphere view needs the CDN script');
+
+        // Namespacing: internals stay private, the shared surface stays reachable.
+        // Looked up as bare identifiers via eval, which is how the other scripts see
+        // them (top-level `let` is not a window property, so cw[name] would be wrong).
+        const visible = n => run('typeof ' + n) !== 'undefined';
+        check('internals are not global',
+            ['gameOverState', 'agentCredit', 'AIM_TOLERANCE', 'enemySpawnTimer'].every(n => !visible(n)),
+            ['gameOverState', 'agentCredit', 'AIM_TOLERANCE', 'enemySpawnTimer'].filter(visible));
+        check('shared state is reachable',
+            ['aiShips', 'enemyShips', 'asteroids', 'score', 'numAIShips'].every(visible));
+
+        // Run a few hundred frames of the real game, rendering included.
+        let threw = null;
+        try { run('for (let i = 0; i < 300; i++) { update(); draw(); }'); } catch (e) { threw = e; }
+        check('300 frames run without throwing', !threw, threw && threw.stack);
+        check('AI fleet exists after 300 frames', run('aiShips.length') > 0, run('aiShips.length'));
+        check('score is a finite number', Number.isFinite(run('score')), run('score'));
+
+        // Mission Control EMP used to be dead code (nested inside update()).
+        check('EMP blast is callable', typeof cw.triggerEMPBlast === 'function');
+        threw = null;
+        try { run('triggerEMPBlast(600, 300)'); } catch (e) { threw = e; }
+        check('EMP blast runs', !threw, threw && threw.stack);
+
+        // Settings hooks used by the Streamlit sidebar.
+        for (const fn of ['setSoundEnabled', 'setMusicEnabled', 'setNumAIShips', 'setNumEnemyShips', 'setNumBossShips', 'setWorldMode', 'setWorldScale']) {
+            check('hook ' + fn, typeof cw[fn] === 'function');
+        }
+        threw = null;
+        try { run('setSoundEnabled(false); setMusicEnabled(false); setNumAIShips(4); setNumEnemyShips(3); setNumBossShips(1);'); } catch (e) { threw = e; }
+        check('settings hooks apply', !threw, threw && threw.stack);
+
+        // Game over: park an asteroid on the player's ship. The in-canvas card must
+        // freeze the world (it replaced a blocking alert()), then the game must
+        // restart on its own.
+        threw = null;
+        try {
+            run('setPlayerShipActive(true); for (let i = 0; i < 30; i++) { update(); draw(); }');
+            run('window.__victim = asteroids[0]; ship.shieldActive = false; ship.x = 100; ship.y = 100; asteroids[0].x = 100; asteroids[0].y = 100;');
+            run('update(); draw();');                                  // collision -> card
+            const frozenAt = run('JSON.stringify([window.__victim.x, window.__victim.y])');
+            run('for (let i = 0; i < 20; i++) { update(); draw(); }'); // card is up
+            const stillFrozen = run('JSON.stringify([window.__victim.x, window.__victim.y])');
+            check('world is frozen while the game-over card is up', frozenAt === stillFrozen, frozenAt + ' vs ' + stillFrozen);
+            run('for (let i = 0; i < 400; i++) { update(); draw(); }'); // auto-restart window
+        } catch (e) { threw = e; }
+        check('game over flow does not throw', !threw, threw && threw.stack);
+        // initGame() puts the ship back at the centre; it was parked at (100, 100).
+        check('game restarted by itself after game over', Math.abs(run('ship.x') - 100) > 50, 'ship.x=' + run('ship.x'));
+
+        // Optional hooks from later features: only checked when present.
+        if (query.get('extra')) {
+            try { (window.extraChecks || (() => {}))(cw, run, check); } catch (e) { check('extra checks', false, e.stack); }
+        }
+    } catch (e) {
+        check('smoke harness', false, e && e.stack || e);
+    }
+    finish();
+});
+
+frame.src = '../index.html?world=sphere&scale=2';
+</script>

@@ -49,3 +49,20 @@ jobs:
             --fuelRescue 1 --evalEvery 0 --evalEpisodes 2 --hidden 32,32 > /tmp/train_fuel.log
           grep -q MODEL_BEGIN /tmp/train_fuel.log
           grep -q '"obsDim":43' /tmp/train_fuel.log
+
+      - name: Benchmark regression gate (reference policies vs stored baseline)
+        # Re-measures the rule-based controller and the seeded random policy on
+        # fixed seeds. It fails if either drifts far from training/benchmarks:
+        # a broken collision rule or spawn table moves those numbers, float noise
+        # does not. After an intentional gameplay change, regenerate with
+        #   python3 training/run_benchmark.py --suite quick --update-baseline
+        run: python3 training/run_benchmark.py --suite quick --check
+
+      - name: Streamlit page template (parse-checks every injected script)
+        run: python3 tests/test_app_template.py
+
+      - name: Browser smoke test (real game in headless Chrome)
+        # Opens index.html on the x2 globe, runs the real update/draw loop, hits
+        # the Streamlit settings hooks and the game-over flow, and fails on any
+        # uncaught page error. Needs the three.js CDN script, like the app itself.
+        run: python3 tests/run_browser_smoke.py
