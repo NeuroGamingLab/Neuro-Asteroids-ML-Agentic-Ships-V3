@@ -211,3 +211,4 @@ training_runs/
 # against; unlike checkpoints they belong in the repo.
 !training/benchmarks/
 !training/benchmarks/*.json
+!training/README.md
