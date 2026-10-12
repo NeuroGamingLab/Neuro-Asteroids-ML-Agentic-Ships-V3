@@ -1,0 +1,235 @@
+:root {
+    --nel-bg: #000000;
+    --nel-primary: #00D2FF;
+    --nel-secondary: #0078FF;
+    --nel-accent: #FF00FF;
+    --nel-purple: #9D00FF;
+    --nel-text: #FFFFFF;
+    --nel-muted: #D1D1D1;
+    --nel-score: #FF00FF;
+    --nel-glow: rgba(0, 210, 255, 0.45);
+    --nel-accent-glow: rgba(255, 0, 255, 0.35);
+    --nel-border: rgba(0, 210, 255, 0.4);
+    --nel-gradient: linear-gradient(135deg, #000000 0%, #0a0a1a 45%, #1a0a2e 100%);
+    --nel-title-gradient: linear-gradient(90deg, #00D2FF 0%, #0078FF 45%, #FF00FF 100%);
+    --nel-panel-gradient: linear-gradient(135deg, rgba(0, 210, 255, 0.08) 0%, rgba(157, 0, 255, 0.08) 100%);
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+    background: var(--nel-gradient);
+    color: var(--nel-primary);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    overflow: hidden;
+}
+
+.game-container {
+    text-align: center;
+    padding: 20px;
+}
+
+.brand-header {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    margin-bottom: 16px;
+}
+
+.brand-logo {
+    width: 96px;
+    height: 96px;
+    border-radius: 50%;
+    box-shadow: 0 0 24px var(--nel-glow), 0 0 40px var(--nel-accent-glow);
+    flex-shrink: 0;
+}
+
+h1 {
+    margin: 0;
+    text-align: left;
+    font-size: 2.4em;
+    background: var(--nel-title-gradient);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    letter-spacing: 0.08em;
+    text-shadow: none;
+    filter: drop-shadow(0 0 12px rgba(0, 210, 255, 0.35));
+}
+
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+}
+
+#gameCanvas {
+    border: 2px solid var(--nel-primary);
+    background: var(--nel-bg);
+    box-shadow: 0 0 24px var(--nel-glow), 0 0 48px var(--nel-accent-glow);
+    display: block;
+    margin: 0 auto;
+}
+
+.focus-hint {
+    color: var(--nel-primary);
+    font-size: 0.9em;
+    margin: 10px 0;
+    padding: 10px 14px;
+    background: var(--nel-panel-gradient);
+    border: 1px solid var(--nel-border);
+    border-radius: 8px;
+    box-shadow: 0 0 12px var(--nel-glow);
+}
+
+.controls {
+    margin-top: 20px;
+    font-size: 0.9em;
+    line-height: 1.6;
+    color: var(--nel-muted);
+}
+
+.controls p {
+    margin: 5px 0;
+}
+
+.controls strong {
+    color: var(--nel-primary);
+}
+
+#score,
+#bestScore,
+#aiShipCount,
+#enemyShipCount,
+#bossShipCount {
+    color: var(--nel-score);
+    font-weight: bold;
+}
+
+/* Hidden by default (index.html sets [hidden]); setupTouchControls() in
+   game.js reveals this only on a detected touch-capable device, so desktop
+   players never see it. */
+.touch-controls {
+    margin-top: 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+}
+
+.touch-controls-row {
+    display: flex;
+    gap: 10px;
+}
+
+.touch-btn {
+    min-width: 56px;
+    min-height: 56px;
+    padding: 10px 14px;
+    font-size: 1.1em;
+    font-weight: bold;
+    color: var(--nel-primary);
+    background: var(--nel-panel-gradient);
+    border: 1px solid var(--nel-border);
+    border-radius: 10px;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none;
+    user-select: none;
+}
+
+.touch-btn:active {
+    background: var(--nel-glow);
+}
+
+.touch-btn-fire {
+    color: var(--nel-accent);
+    border-color: var(--nel-accent);
+    min-width: 84px;
+}
+
+.credit-line {
+    margin-top: 20px;
+    text-align: center;
+    color: var(--nel-muted);
+    font-size: 0.9em;
+}
+
+.debug3d-panel {
+    background: var(--nel-panel-gradient);
+    border: 1px solid var(--nel-border);
+    padding: 8px 10px;
+    margin: 8px 0;
+    font-size: 0.85em;
+    color: var(--nel-accent);
+    border-radius: 6px;
+}
+
+/* Mission Control Tactical Bar */
+.mission-control-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin: 10px auto;
+    max-width: 95%;
+    padding: 8px 14px;
+    background: rgba(10, 15, 30, 0.85);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(0, 210, 255, 0.35);
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6), inset 0 0 15px rgba(0, 210, 255, 0.1);
+}
+
+.mc-title {
+    font-family: monospace;
+    font-weight: bold;
+    font-size: 11px;
+    color: #00D2FF;
+    letter-spacing: 1px;
+    text-shadow: 0 0 8px rgba(0, 210, 255, 0.6);
+    margin-right: 4px;
+}
+
+.mc-btn {
+    font-family: monospace;
+    font-weight: bold;
+    font-size: 10px;
+    padding: 5px 11px;
+    border-radius: 4px;
+    cursor: pointer;
+    border: 1px solid currentColor;
+    background: rgba(0, 0, 0, 0.65);
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    outline: none;
+    letter-spacing: 0.5px;
+}
+
+.mc-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 0 12px currentColor;
+}
+
+.mc-btn:active {
+    transform: translateY(1px);
+}
+
+.mc-btn-green { color: #00FF66; border-color: #00FF66; }
+.mc-btn-cyan { color: #00E5FF; border-color: #00E5FF; }
+.mc-btn-gold { color: #FFD600; border-color: #FFD600; }
+.mc-btn-pink { color: #FF0077; border-color: #FF0077; }
+.mc-btn-blue { color: #0078FF; border-color: #0078FF; }
+

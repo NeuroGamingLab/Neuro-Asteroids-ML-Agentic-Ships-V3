@@ -1,0 +1,26 @@
+# Version control
+.git
+.github
+.gitignore
+
+# Python cache / virtual envs
+__pycache__
+*.pyc
+*.pyo
+.venv
+venv
+
+# Logs
+*.log
+streamlit.log
+
+# Training artefacts (large; not needed at runtime)
+training_runs/
+sim/
+
+# Terraform / infra
+terraform/
+
+# IDE / OS
+.DS_Store
+*.swp

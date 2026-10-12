@@ -1,0 +1,51 @@
+name: CI
+
+# Runs on macOS because the whole RL pipeline (tests, trainer, evaluation) runs
+# on the JavaScriptCore binary that ships with the OS. No Node, no npm.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unit tests, env determinism, browser inference path, syntax
+        run: ./run_tests.sh
+
+      - name: Python syntax (Streamlit app + training driver)
+        run: |
+          python3 -m py_compile app.py training/run_training.py training/run_matrix.py
+
+      - name: Training smoke test (stage 0, 3 iterations)
+        # Proves the trainer still runs end to end and emits a loadable
+        # checkpoint. Iterations are tiny on purpose: this is a plumbing check,
+        # not a training run.
+        run: |
+          JSC=/System/Library/Frameworks/JavaScriptCore.framework/Versions/A/Helpers/jsc
+          $JSC training/train.js -- --stage 0 --iterations 3 --rollout 512 \
+            --evalEvery 0 --evalEpisodes 2 --hidden 32,32 > /tmp/train_smoke.log
+          grep -q MODEL_BEGIN /tmp/train_smoke.log
+          python3 - <<'EOF'
+          import json
+          lines = open('/tmp/train_smoke.log').read().splitlines()
+          start = lines.index('MODEL_BEGIN') + 1
+          end = lines.index('MODEL_END')
+          payload = json.loads('\n'.join(lines[start:end]))
+          assert payload['format'] == 'asteroids-ppo-policy', payload.get('format')
+          assert payload['obsDim'] == len(payload['featureNames'])
+          print('checkpoint ok:', payload['obsDim'], 'features,', payload['actionSize'], 'actions')
+          EOF
+
+      - name: Training smoke test with fuel rescue (43-dim observation)
+        run: |
+          JSC=/System/Library/Frameworks/JavaScriptCore.framework/Versions/A/Helpers/jsc
+          $JSC training/train.js -- --stage 0 --iterations 2 --rollout 512 --agents 4 \
+            --fuelRescue 1 --evalEvery 0 --evalEpisodes 2 --hidden 32,32 > /tmp/train_fuel.log
+          grep -q MODEL_BEGIN /tmp/train_fuel.log
+          grep -q '"obsDim":43' /tmp/train_fuel.log

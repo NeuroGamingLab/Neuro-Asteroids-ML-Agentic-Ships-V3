@@ -1,0 +1,209 @@
+# Claude Code session runtime state (not project config)
+.claude/scheduled_tasks.lock
+
+# Terraform files
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+terraform.tfstate.*
+*.tfplan
+*.tfplan.*
+tfplan
+tfplan-*
+
+# Override files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Crash log files
+crash.log
+crash.*.log
+
+# Exclude .tfvars files that might contain sensitive data (but keep terraform.tfvars as template)
+# *.tfvars
+# *.tfvars.json
+terraform.tfvars.backup
+*.tfvars.local
+
+# Ignore CLI configuration files
+.terraformrc
+terraform.rc
+
+# ============================================
+# SECURITY: Sensitive Files & Credentials
+# ============================================
+
+# SSH Keys & Certificates
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+*.ppk
+ssh_keys/
+.ssh/
+
+# API Keys & Secrets
+*.secret
+*.secrets
+*_secret*
+*_secrets*
+secrets.json
+secrets.yaml
+secrets.yml
+.secrets
+api_keys.txt
+api-keys.txt
+*.apikey
+
+# Environment Variables & Config Files
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+.env.test
+*.env
+.venv/
+venv/
+ENV/
+env.bak
+
+# AWS Credentials
+.aws/
+aws-credentials
+aws-credentials.json
+.aws/credentials
+.aws/config
+*.pem
+*.key
+
+# Passwords & Authentication
+passwords.txt
+password.txt
+*.password
+credentials.json
+credentials.yaml
+credentials.yml
+auth.json
+auth.yaml
+auth.yml
+*.auth
+
+# Database Credentials
+db_credentials.*
+database.*.json
+*.db.password
+
+# Cloud Provider Credentials
+gcp-*.json
+azure-*.json
+*.service-account.json
+service-account-*.json
+
+# Configuration Files with Sensitive Data
+config.local.*
+config.production.*
+config.*.local
+settings.local.*
+*.local.json
+*.local.yaml
+*.local.yml
+
+# Backup Files (may contain sensitive data)
+*.bak
+*.backup
+*.old
+*_backup
+*_old
+
+# Log Files (may contain sensitive information)
+*.log
+logs/
+*.log.*
+
+# Temporary Files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# ============================================
+# ML artefacts
+# ============================================
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Model weights and exports. Trained policies are build outputs, not source;
+# committing them bloats history and makes diffs unreadable.
+*.h5
+*.keras
+*.pb
+*.ckpt
+*.tflite
+models/**/*.bin
+models/**/model.json
+models/*.json
+
+# Training data exports and preprocessed arrays
+*.npy
+*.npz
+marl_training_data_*.json
+training_data/
+processed_data/
+
+# Training run logs and checkpoints
+training_runs/
+
+# IDE Files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+*.md 
+*.txt
+*.docx
+*.doc
+*.pdf
+*.xls
+*.xlsx
+*.ppt
+*.pptx
+*.csv
+*.json
+*.yaml
+*.yml
+# Keep project dependency files (override *.txt above)
+!requirements.txt
+!training_scripts/requirements_training.txt
+# Keep CI workflows (override *.yml above) and the enhancement review docs
+# (override *.md above).
+!.github/
+!.github/**
+!ml-app-enhancement-reviews/
+!ml-app-enhancement-reviews/*.md

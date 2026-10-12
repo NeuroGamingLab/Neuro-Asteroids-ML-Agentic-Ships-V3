@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Observe: Agentic ML in Action</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="game-container">
+        <div class="brand-header">
+            <img class="brand-logo" src="assets/neuro-engineering-lab-logo.png" alt="Neuro-Engineering-Lab logo">
+            <h1>Observe: Agentic ML in Action</h1>
+        </div>
+        <canvas id="gameCanvas"></canvas>
+        <!-- Hidden by default; setupTouchControls() in game.js reveals it only
+             when it detects a touch-capable device. -->
+        <div id="touchControls" class="touch-controls" hidden>
+            <div class="touch-controls-row">
+                <button type="button" class="touch-btn" data-key="arrowleft" aria-label="Rotate left">◀</button>
+                <button type="button" class="touch-btn" data-key="arrowup" aria-label="Thrust">▲</button>
+                <button type="button" class="touch-btn" data-key="arrowright" aria-label="Rotate right">▶</button>
+            </div>
+            <div class="touch-controls-row">
+                <button type="button" class="touch-btn" data-key="f" aria-label="Shield">SHIELD</button>
+                <button type="button" class="touch-btn touch-btn-fire" data-key="space" aria-label="Fire">FIRE</button>
+                <button type="button" class="touch-btn" data-key="h" aria-label="Hyperspace">HYPER</button>
+            </div>
+        </div>
+        <div class="mission-control-bar">
+            <span class="mc-title">🛰 MISSION CONTROL:</span>
+            <button type="button" class="mc-btn mc-btn-green" onclick="if (window.AsteroidsTelemetry) AsteroidsTelemetry.dispatchCommand('AIRDROP_RAILGUN')">⚡ AIRDROP RAILGUN</button>
+            <button type="button" class="mc-btn mc-btn-cyan" onclick="if (window.AsteroidsTelemetry) AsteroidsTelemetry.dispatchCommand('OVERCHARGE_SHIELDS')">🛡 OVERCHARGE SHIELDS</button>
+            <button type="button" class="mc-btn mc-btn-gold" onclick="if (window.AsteroidsTelemetry) AsteroidsTelemetry.dispatchCommand('DETONATE_EMP')">💥 DETONATE EMP</button>
+            <button type="button" class="mc-btn mc-btn-pink" onclick="if (window.AsteroidsTelemetry) AsteroidsTelemetry.dispatchCommand('EMERGENCY_REFUEL')">⛽ EMERGENCY REFUEL</button>
+            <button type="button" class="mc-btn mc-btn-blue" onclick="if (window.AsteroidsTelemetry) AsteroidsTelemetry.exportJSON()">💾 EXPORT FLIGHT LOG</button>
+        </div>
+        <div class="controls">
+            <p><strong>Controls:</strong></p>
+            <p>Arrow Keys: Move ship (↑ forward, ↓ back, ← left, → right)</p>
+            <p>Space: Fire / Speed Boost</p>
+            <p>H: Hyperspace</p>
+            <p>P: Pause</p>
+            <p>T: Toggle Flight Telemetry HUD</p>
+        </div>
+        <!-- game.js reads/writes these directly (score, best score); kept
+             off-screen rather than removed so updateScore() still has
+             something to write to instead of throwing on a null element. -->
+        <div class="visually-hidden">
+            <span id="score">0</span>
+            <span id="bestScore">0</span>
+        </div>
+        <p class="credit-line">Designed by Dang Hoang, <em>AI/ML Eng.</em></p>
+    </div>
+    <script src="theme.js"></script>
+    <!-- rng.js must load before game.js: game.js resolves gameRandom() lexically -->
+    <script src="rng.js"></script>
+    <!-- World geometry (torus or sphere) and the Three.js sphere renderer. -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"
+            integrity="sha384-CI3ELBVUz9XQO+97x6nwMDPosPR5XvsxW2ua7N1Xeygeh1IxtgqtCkGfQY9WWdHu"
+            crossorigin="anonymous"></script>
+    <script src="world.js"></script>
+    <script src="sphere_view.js"></script>
+    <script src="fx.js"></script>
+    <script src="ml_features.js"></script>
+    <!-- Policy runner and overlays load before game.js so draw() can find them. -->
+    <script src="training/nn.js"></script>
+    <script src="policy_runner.js"></script>
+    <script src="policy_viz.js"></script>
+    <script src="hud.js"></script>
+    <script src="marl_environment.js"></script>
+    <script src="marl_system.js"></script>
+    <script>if (typeof MARLSystem !== 'undefined') window.marlSystem = new MARLSystem({ numAgents: 4 });</script>
+    <!-- Entity classes, extracted from game.js: order matters (AIShip extends Ship,
+         EnemyCoordinationSystem references AIShip at runtime). -->
+    <script src="entities.js"></script>
+    <script src="ai_ship.js"></script>
+    <script src="enemy_ship.js"></script>
+    <script src="enemy_coordination.js"></script>
+    <script src="game.js"></script>
+
+    <!-- Optional: run a policy trained by training/run_training.py. The browser
+         executes the same training/nn.js forward pass the trainer did, so there
+         is no model conversion step between training and play. -->
+    <script>
+        setHudEnabled(true);
+        setActionWheels(true);
+        // World: sphere by default; ?world=torus for the flat map.
+        // ?cam=alpha|fleet|orbit and ?zoom=1.4..4.5 tune the sphere camera.
+        // ?scale=1..3 sets the globe size relative to the screen (default 2).
+        (function () {
+            const q = new URLSearchParams(location.search);
+            const sphere = (q.get('world') || 'sphere') !== 'torus';
+            setWorldScale(parseFloat(q.get('scale') || '2'));
+            setWorldMode(sphere ? 'sphere' : 'torus');
+            if (sphere && typeof SphereView !== 'undefined') {
+                SphereView.setCamera(q.get('cam') || 'alpha');
+                if (q.get('zoom')) SphereView.setZoom(parseFloat(q.get('zoom')));
+            }
+        })();
+        // Served from a file:// URL, fetch() of the checkpoint is blocked by CORS,
+        // so this only activates over http(s). Run `python3 -m http.server` here.
+        (async function () {
+            if (location.protocol === 'file:') return;
+            try {
+                await loadTrainedPolicy('models/policy_stage0.json');
+                setTrainedPolicyEnabled(true, false);
+                setPolicyOverlay(true);
+                setValueHeatmap(true);
+                // Web Worker inference: fetch the two sources the worker is built from.
+                const [nn, worker] = await Promise.all([
+                    fetch('training/nn.js').then(r => r.text()),
+                    fetch('policy_worker.js').then(r => r.text())
+                ]);
+                enablePolicyWorker(nn, worker);
+            } catch (e) {
+                console.log('[Policy] No trained policy loaded:', e.message);
+            }
+        })();
+    </script>
+</body>
+</html>
