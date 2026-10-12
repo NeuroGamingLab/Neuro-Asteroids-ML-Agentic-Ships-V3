@@ -27,6 +27,11 @@
     let lines = null, linePos = null, lineCol = null, lineCount = 0;
     let points = null, pointPos = null, pointCol = null, pointCount = 0;
     let gridGroup = null, stars = null, globe = null, halo = null;
+    // Soft additive halos (stand-in for bloom) and translucent shield domes.
+    const MAX_GLOWS = 1024;
+    let glows = null, glowPos = null, glowCol = null, glowSize = null, glowCount = 0;
+    const shieldPool = new Map();
+    let shieldGeometry = null;
     // Real, lit 3D meshes for AI/player ship hulls and boss hulls (basic/
     // advanced enemies, asteroids and bullets stay in the flat, unlit
     // vector-line buffers above -- see updateShipHullMesh()/
@@ -41,7 +46,7 @@
 
     // Camera state. `camDir` is the unit vector the camera sits on; smoothed
     // toward the follow target so the sphere appears to roll under the fleet.
-    let followMode = 'alpha';      // 'alpha' | 'fleet' | 'orbit'
+    let followMode = 'alpha';      // 'alpha' | 'fleet' | 'boss' | 'orbit'
     // Requested camera distance in radii *of the unscaled globe*. The
     // effective distance shrinks as the world scale grows so that, at a given
     // setting, a ship keeps the same on-screen size: (zoom-1)*R is the height
@@ -65,6 +70,14 @@
     let camDir = [1, 0, 0];
     let camUp = [0, 1, 0];
     let orbitAngle = 0;
+    // Kill-cam: a short cinematic swing to a boss kill, then back to normal
+    // follow. Rate-limited because a swarm with many bosses would otherwise
+    // yank the camera around constantly.
+    let killCam = null;            // { x, y, frames } while active
+    let killCamCooldown = 0;       // frames until another kill-cam may start
+    let killCamEnabled = true;
+    let bossTarget = null;         // boss the 'boss' follow mode is locked onto
+    let zoomSnapped = false;       // first frame snaps zoom instead of gliding
     let hiddenCount = 0;
     let frame = 0;
 
@@ -253,6 +266,42 @@
         }));
         points.frustumCulled = false;
         scene.add(points);
+
+        // Halo sprites: per-point size and colour, soft radial falloff, additive.
+        // Depth-tested so the globe still hides halos on its far side.
+        glowPos = new Float32Array(MAX_GLOWS * 3);
+        glowCol = new Float32Array(MAX_GLOWS * 3);
+        glowSize = new Float32Array(MAX_GLOWS);
+        const gg = new THREE.BufferGeometry();
+        gg.setAttribute('position', new THREE.BufferAttribute(glowPos, 3).setUsage(THREE.DynamicDrawUsage));
+        gg.setAttribute('glowColor', new THREE.BufferAttribute(glowCol, 3).setUsage(THREE.DynamicDrawUsage));
+        gg.setAttribute('glowSize', new THREE.BufferAttribute(glowSize, 1).setUsage(THREE.DynamicDrawUsage));
+        gg.setDrawRange(0, 0);
+        glows = new THREE.Points(gg, new THREE.ShaderMaterial({
+            uniforms: { pixelRatio: { value: renderer.getPixelRatio() } },
+            vertexShader: [
+                'attribute vec3 glowColor;',
+                'attribute float glowSize;',
+                'uniform float pixelRatio;',
+                'varying vec3 vGlow;',
+                'void main() {',
+                '  vGlow = glowColor;',
+                '  gl_PointSize = glowSize * pixelRatio;',
+                '  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
+                '}'
+            ].join('\n'),
+            fragmentShader: [
+                'varying vec3 vGlow;',
+                'void main() {',
+                '  float r = length(gl_PointCoord - vec2(0.5)) * 2.0;',
+                '  float a = clamp(1.0 - r, 0.0, 1.0);',
+                '  gl_FragColor = vec4(vGlow, a * a);',
+                '}'
+            ].join('\n'),
+            transparent: true, blending: THREE.AdditiveBlending, depthWrite: false
+        }));
+        glows.frustumCulled = false;
+        scene.add(glows);
     }
 
     function placeCanvases() {
@@ -534,100 +583,146 @@
         return { mesh, geometry, material };
     }
 
-    function updateShipHullMesh(ship, s, angle, colorRgb) {
-        let entry = shipMeshPool.get(ship);
+    // Finds or creates a body's mesh, marks it visible for this frame, tints it,
+    // and runs the hit flash: an emissive pulse that decays over ~20 frames,
+    // triggered whenever the body's `health` drops between two frames. Every
+    // update*Mesh() below goes through here so those behaviours live in one
+    // place. Bodies nobody claims in a given frame stay hidden (see
+    // reconcileShipMeshPool).
+    function claimMesh(obj, tris, colorRgb) {
+        let entry = shipMeshPool.get(obj);
         if (!entry) {
-            entry = createHullMeshEntry(shipHullTriangles(s).length * 3);
-            shipMeshPool.set(ship, entry);
+            entry = createHullMeshEntry(tris.length * 3);
+            entry.flash = 0;
+            entry.lastHealth = undefined;
+            shipMeshPool.set(obj, entry);
         }
+        entry.mesh.visible = true;
+        if (typeof obj.health === 'number') {
+            if (entry.lastHealth !== undefined && obj.health < entry.lastHealth) entry.flash = 1;
+            entry.lastHealth = obj.health;
+        }
+        entry.flash *= 0.86;
+        const f = entry.flash > 0.02 ? entry.flash : 0;
+        entry.material.emissive.setRGB(f * 0.9, f * 0.9, f * 0.9);
         entry.material.color.setRGB(colorRgb[0], colorRgb[1], colorRgb[2]);
-        writeHullVertices(entry, ship.x, ship.y, angle, shipHullTriangles(s));
+        return entry;
+    }
+
+    function updateShipHullMesh(ship, s, angle, colorRgb) {
+        const tris = shipHullTriangles(s);
+        writeHullVertices(claimMesh(ship, tris, colorRgb), ship.x, ship.y, angle, tris);
     }
 
     function updateBossHullMesh(boss, s, angle, colorRgb) {
-        let entry = shipMeshPool.get(boss);
-        if (!entry) {
-            entry = createHullMeshEntry(bossHullTriangles(s).length * 3);
-            shipMeshPool.set(boss, entry);
-        }
-        entry.material.color.setRGB(colorRgb[0], colorRgb[1], colorRgb[2]);
-        writeHullVertices(entry, boss.x, boss.y, angle, bossHullTriangles(s));
+        const tris = bossHullTriangles(s);
+        writeHullVertices(claimMesh(boss, tris, colorRgb), boss.x, boss.y, angle, tris);
     }
 
     function updateAsteroidMesh(a, r, angle, colorRgb, isMineral) {
-        let entry = shipMeshPool.get(a);
-        if (!entry) {
-            entry = createHullMeshEntry(asteroidHullTriangles(r).length * 3);
-            shipMeshPool.set(a, entry);
-        }
-        entry.material.color.setRGB(colorRgb[0], colorRgb[1], colorRgb[2]);
-        writeHullVertices(entry, a.x, a.y, angle, asteroidHullTriangles(r), r * 0.3);
+        const tris = asteroidHullTriangles(r);
+        writeHullVertices(claimMesh(a, tris, colorRgb), a.x, a.y, angle, tris, r * 0.3);
     }
 
     function updateBasicEnemyMesh(e, s, angle, colorRgb) {
-        let entry = shipMeshPool.get(e);
-        if (!entry) {
-            entry = createHullMeshEntry(basicEnemyTriangles(s).length * 3);
-            shipMeshPool.set(e, entry);
-        }
-        entry.material.color.setRGB(colorRgb[0], colorRgb[1], colorRgb[2]);
-        writeHullVertices(entry, e.x, e.y, angle, basicEnemyTriangles(s));
+        const tris = basicEnemyTriangles(s);
+        writeHullVertices(claimMesh(e, tris, colorRgb), e.x, e.y, angle, tris);
     }
 
     function updateAdvancedEnemyMesh(e, s, angle, colorRgb) {
-        let entry = shipMeshPool.get(e);
-        if (!entry) {
-            entry = createHullMeshEntry(advancedEnemyTriangles(s).length * 3);
-            shipMeshPool.set(e, entry);
-        }
-        entry.material.color.setRGB(colorRgb[0], colorRgb[1], colorRgb[2]);
-        writeHullVertices(entry, e.x, e.y, angle, advancedEnemyTriangles(s));
+        const tris = advancedEnemyTriangles(s);
+        writeHullVertices(claimMesh(e, tris, colorRgb), e.x, e.y, angle, tris);
     }
 
     function updatePowerUpMesh(p, s, pulse, colorRgb) {
-        let entry = shipMeshPool.get(p);
-        if (!entry) {
-            entry = createHullMeshEntry(powerUpTriangles(s).length * 3);
-            shipMeshPool.set(p, entry);
-        }
-        entry.material.color.setRGB(colorRgb[0], colorRgb[1], colorRgb[2]);
-        writeHullVertices(entry, p.x, p.y, pulse, powerUpTriangles(s), s * 0.8);
+        const tris = powerUpTriangles(s);
+        writeHullVertices(claimMesh(p, tris, colorRgb), p.x, p.y, pulse, tris, s * 0.8);
     }
 
     function updateSubsystemMesh(sub, x, y, s, colorRgb, destroyed) {
-        let entry = shipMeshPool.get(sub);
-        if (!entry) {
-            entry = createHullMeshEntry(subsystemTriangles(s).length * 3);
-            shipMeshPool.set(sub, entry);
-        }
-        if (destroyed) {
-            entry.material.color.setRGB(0.2, 0.2, 0.2);
-        } else {
-            entry.material.color.setRGB(colorRgb[0], colorRgb[1], colorRgb[2]);
-        }
-        writeHullVertices(entry, x, y, 0, subsystemTriangles(s), s * 0.5);
+        const tris = subsystemTriangles(s);
+        const entry = claimMesh(sub, tris, destroyed ? [0.2, 0.2, 0.2] : colorRgb);
+        writeHullVertices(entry, x, y, 0, tris, s * 0.5);
     }
 
-    // Called once per render() with every ship/boss still alive this frame,
-    // so a destroyed one's mesh/geometry/material get disposed instead of
-    // sitting in the pool (keyed by object reference) forever.
-    function reconcileShipMeshPool(liveShips) {
-        for (const [shipObj, entry] of shipMeshPool) {
-            if (liveShips.has(shipObj)) continue;
-            scene.remove(entry.mesh);
-            entry.geometry.dispose();
-            entry.material.dispose();
-            shipMeshPool.delete(shipObj);
+    // Translucent additive dome around a body whose shield is up. One shared
+    // unit icosphere, scaled per body; only the material is per-body.
+    function syncShieldMesh(obj, radius, colorRgb) {
+        const THREE = root.THREE;
+        let entry = shieldPool.get(obj);
+        if (!entry) {
+            if (!shieldGeometry) shieldGeometry = new THREE.IcosahedronGeometry(1, 2);
+            const material = new THREE.MeshBasicMaterial({
+                transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending,
+                depthWrite: false, side: THREE.DoubleSide
+            });
+            const mesh = new THREE.Mesh(shieldGeometry, material);
+            mesh.frustumCulled = false;
+            scene.add(mesh);
+            entry = { mesh, material };
+            shieldPool.set(obj, entry);
         }
+        entry.mesh.visible = true;
+        const p = root.WORLD.toWorld3(obj.x, obj.y, 0, 0, SHIP_HULL_LIFT + radius * 0.25);
+        entry.mesh.position.set(p[0], p[1], p[2]);
+        entry.mesh.scale.setScalar(radius * (1 + Math.sin(frame / 6) * 0.04));
+        entry.material.color.setRGB(colorRgb[0], colorRgb[1], colorRgb[2]);
+        entry.material.opacity = 0.14 + 0.07 * Math.sin(frame / 5);
+    }
+
+    // Called once per render() with every body still alive this frame.
+    //  - A destroyed body's mesh/geometry/material get disposed instead of
+    //    sitting in the pool (keyed by object reference) forever.
+    //  - Every surviving body is hidden here and re-shown by claimMesh() /
+    //    syncShieldMesh() only if it is actually drawn this frame. render()
+    //    skips bodies on the far hemisphere, and without this their meshes
+    //    stayed frozen at the last position they were drawn -- a ghost
+    //    hanging on the globe's limb long after the body had moved on.
+    function reconcileShipMeshPool(liveShips) {
+        for (const [obj, entry] of shipMeshPool) {
+            if (!liveShips.has(obj)) {
+                scene.remove(entry.mesh);
+                entry.geometry.dispose();
+                entry.material.dispose();
+                shipMeshPool.delete(obj);
+            } else {
+                entry.mesh.visible = false;
+            }
+        }
+        for (const [obj, entry] of shieldPool) {
+            if (!liveShips.has(obj)) {
+                scene.remove(entry.mesh);
+                entry.material.dispose();
+                shieldPool.delete(obj);
+            } else {
+                entry.mesh.visible = false;
+            }
+        }
+    }
+
+    // Soft additive halo at a world position: the cheap stand-in for a bloom
+    // pass. EffectComposer/UnrealBloomPass aren't in the pinned three.min.js
+    // build, and pulling them from another CDN path would add unpinned
+    // third-party script to a page that otherwise loads exactly one.
+    function glow(p, c, size, k) {
+        if (glowCount >= MAX_GLOWS) return;
+        const i = glowCount * 3;
+        glowPos[i] = p[0]; glowPos[i + 1] = p[1]; glowPos[i + 2] = p[2];
+        glowCol[i] = c[0] * k; glowCol[i + 1] = c[1] * k; glowCol[i + 2] = c[2] * k;
+        glowSize[glowCount] = size;
+        glowCount++;
     }
 
     function drawShip(sh, colorCss, isPlayer) {
         const s = sh.size || 20;
         const c = rgb(colorCss);
         updateShipHullMesh(sh, s, sh.angle, c);
+        glow(root.WORLD.toWorld3(sh.x, sh.y, 0, 0, SHIP_HULL_LIFT + s * 0.3), c, isPlayer ? 40 : 52, 0.5);
         poly(sh.x, sh.y, SHIP_TRI(s), sh.angle, 2, c, true);
         if (sh.shieldActive) {
-            circle(sh.x, sh.y, (sh.shieldRadius || s * 1.6) + Math.sin(frame / 6) * 2, 2, rgb(THEME.cyan || '#00D2FF'));
+            const shieldRgb = rgb(THEME.cyan || '#00D2FF');
+            circle(sh.x, sh.y, (sh.shieldRadius || s * 1.6) + Math.sin(frame / 6) * 2, 2, shieldRgb);
+            syncShieldMesh(sh, sh.shieldRadius || s * 1.6, shieldRgb);
         }
         if (sh.isAlpha && !isPlayer) {
             circle(sh.x, sh.y, s * 1.35, 2, dim(c, 0.45), 24);
@@ -655,6 +750,7 @@
         const isMin = !!a.isMineral;
         const c = isMin ? rgb('#FFD700') : rgb('#6FA8C8');
         updateAsteroidMesh(a, a.radius || 15, a.rotation || 0, c, isMin);
+        if (isMin) glow(root.WORLD.toWorld3(a.x, a.y, 0, 0, SHIP_HULL_LIFT + 4), c, 46, 0.35);
         const pts = a.vertices ? a.vertices.map(v => [v.x, v.y]) : [[a.radius, 0], [0, a.radius], [-a.radius, 0], [0, -a.radius]];
         poly(a.x, a.y, pts, a.rotation || 0, 1.5, c, true);
     }
@@ -663,6 +759,8 @@
         const s = e.size || 15;
         const css = e.color || THEME.enemy || '#FF4466';
         const c = rgb(css);
+        const haloSize = e.type === 'boss' ? 120 : e.type === 'advanced' ? 58 : 46;
+        glow(root.WORLD.toWorld3(e.x, e.y, 0, 0, SHIP_HULL_LIFT + s * 0.3), c, haloSize, e.type === 'boss' ? 0.55 : 0.45);
         if (e.type === 'boss') {
             updateBossHullMesh(e, s, e.angle || 0, c);
             poly(e.x, e.y, BOSS_HEX(s), e.angle || 0, 2, c, true);
@@ -672,6 +770,7 @@
                     const pos = e.getSubsystemWorldPos(sub);
                     const subC = sub.destroyed ? rgb('#444444') : rgb(sub.color || '#00E5FF');
                     updateSubsystemMesh(sub, pos.x, pos.y, sub.radius * 0.8, subC, sub.destroyed);
+                    if (!sub.destroyed) glow(root.WORLD.toWorld3(pos.x, pos.y, 0, 0, SHIP_HULL_LIFT + 3), subC, 28, 0.5);
                     circle(pos.x, pos.y, sub.radius, 1.5, subC, 12);
                     seg(root.WORLD.toWorld3(e.x, e.y, 0, 0, 2), root.WORLD.toWorld3(pos.x, pos.y, 0, 0, 2), dim(subC, 0.4));
                 });
@@ -683,7 +782,10 @@
             updateBasicEnemyMesh(e, s, e.angle || 0, c);
             poly(e.x, e.y, ENEMY_DIAMOND(s), e.angle || 0, 2, c, true);
         }
-        if (e.shieldActive) circle(e.x, e.y, s * 1.5, 2, dim(c, 0.8));
+        if (e.shieldActive) {
+            circle(e.x, e.y, s * 1.5, 2, dim(c, 0.8));
+            syncShieldMesh(e, s * 1.5, dim(c, 0.9));
+        }
         if (e.maxHealth > 0 && e.health < e.maxHealth) {
             const hp = Math.max(0, e.health / e.maxHealth);
             const w = s * 1.6;
@@ -695,6 +797,7 @@
         if (!p || p.lifetime <= 0) return;
         const c = rgb(p.color || '#00FF66');
         updatePowerUpMesh(p, p.radius || 10, p.pulse || 0, c);
+        glow(root.WORLD.toWorld3(p.x, p.y, 0, 0, SHIP_HULL_LIFT + 4), c, 40, 0.6);
         circle(p.x, p.y, (p.radius || 10) * 1.25, 1.5, c, 12);
     }
 
@@ -704,6 +807,7 @@
         const ca = Math.cos(b.angle || 0), sa = Math.sin(b.angle || 0);
         seg(WORLD.toWorld3(b.x, b.y, -ca * 5, -sa * 5, 2), WORLD.toWorld3(b.x, b.y, ca * 3, sa * 3, 2), c);
         dotp(WORLD.toWorld3(b.x, b.y, 0, 0, 2.5), c);
+        glow(WORLD.toWorld3(b.x, b.y, 0, 0, 2.5), c, 15, 0.8);
     }
 
     // ------------------------------------------------------------------
@@ -714,6 +818,11 @@
 
     function followTarget(state) {
         const WORLD = root.WORLD;
+        if (killCam && killCam.frames > 0) {
+            killCam.frames--;
+            const kf = WORLD.frameAt(killCam.x, killCam.y);
+            return { dir: kf.p, up: kf.n };
+        }
         if (followMode === 'orbit') {
             orbitAngle += 0.0025;
             const tilt = 0.42;
@@ -729,6 +838,23 @@
                 acc[0] += p[0]; acc[1] += p[1]; acc[2] += p[2]; n++;
             }
             if (n && Math.hypot(acc[0], acc[1], acc[2]) > 1e-3) focus = normalize(acc);
+        }
+        if (followMode === 'boss' && state.enemyShips) {
+            const bosses = state.enemyShips.filter(e => e && e.type === 'boss');
+            if (bosses.length) {
+                // Stay locked on one boss until it dies, so the camera doesn't
+                // hop between bosses every time their relative distance changes.
+                if (!bossTarget || !bosses.includes(bossTarget)) {
+                    let best = null, bestDot = -2;
+                    for (const b of bosses) {
+                        const p = WORLD.frameAt(b.x, b.y).p;
+                        const d = p[0] * camDir[0] + p[1] * camDir[1] + p[2] * camDir[2];
+                        if (d > bestDot) { bestDot = d; best = b; }
+                    }
+                    bossTarget = best;
+                }
+                focus = WORLD.frameAt(bossTarget.x, bossTarget.y).p;
+            }
         }
         if (!focus) {
             let lead = null;
@@ -752,7 +878,19 @@
         up = normalize([up[0] - camDir[0] * d, up[1] - camDir[1] * d, up[2] - camDir[2] * d]);
         if (!isFinite(up[0]) || Math.hypot(up[0], up[1], up[2]) < 1e-6) up = [0, 1, 0];
         camUp = up;
-        zoom = effectiveZoom();
+        if (killCamCooldown > 0) killCamCooldown--;
+        // Glide to the target distance instead of snapping, so changing the
+        // Distance slider, the world scale, or entering/leaving the kill-cam
+        // reads as a camera move rather than a cut. The kill-cam pulls in to
+        // 70% of the normal distance (never closer than 1.25 radii, which
+        // would put the camera inside the globe's silhouette).
+        const baseZoom = effectiveZoom();
+        const targetZoom = (killCam && killCam.frames > 0) ? Math.max(1.25, baseZoom * 0.7) : baseZoom;
+        if (!zoomSnapped) { zoom = targetZoom; zoomSnapped = true; }
+        else {
+            zoom += (targetZoom - zoom) * 0.08;
+            if (Math.abs(targetZoom - zoom) < 1e-3) zoom = targetZoom;
+        }
         const dist = R * zoom;
         camera.position.set(camDir[0] * dist, camDir[1] * dist, camDir[2] * dist);
         camera.up.set(camUp[0], camUp[1], camUp[2]);
@@ -767,7 +905,7 @@
         if (!ready) return;
         frame++;
         placeCanvases();
-        lineCount = 0; pointCount = 0; hiddenCount = 0;
+        lineCount = 0; pointCount = 0; glowCount = 0; hiddenCount = 0;
         const WORLD = root.WORLD;
 
         const liveEntities = new Set(state.aiShips || []);
@@ -864,6 +1002,11 @@
         pg.attributes.position.needsUpdate = true;
         pg.attributes.color.needsUpdate = true;
         pg.setDrawRange(0, pointCount);
+        const gg = glows.geometry;
+        gg.attributes.position.needsUpdate = true;
+        gg.attributes.glowColor.needsUpdate = true;
+        gg.attributes.glowSize.needsUpdate = true;
+        gg.setDrawRange(0, glowCount);
 
         renderer.render(scene, camera);
     }
@@ -956,7 +1099,7 @@
         ctx.font = '10px monospace';
         ctx.fillStyle = 'rgba(209,209,209,0.85)';
         ctx.textAlign = 'right';
-        const modeLabel = followMode === 'orbit' ? 'orbit' : followMode === 'fleet' ? 'follow fleet' : 'follow alpha';
+        const modeLabel = followMode === 'orbit' ? 'orbit' : followMode === 'fleet' ? 'follow fleet' : followMode === 'boss' ? 'follow boss' : 'follow alpha';
         const sc = WORLD.getScale();
         const scaleLabel = sc !== 1 ? `  x${sc}` : '';
         ctx.fillText(`SPHERE R=${R.toFixed(0)}${scaleLabel}  cam: ${modeLabel} ${zoom.toFixed(1)}R  far side: ${hiddenCount}`, mx + mw, my + mh + 12);
@@ -972,9 +1115,15 @@
         project: project,
         overlayContext: () => overlayCtx,
         setVisible: setVisible,
-        setCamera: (mode) => { followMode = (mode === 'orbit' || mode === 'fleet') ? mode : 'alpha'; },
+        setCamera: (mode) => { followMode = (mode === 'orbit' || mode === 'fleet' || mode === 'boss') ? mode : 'alpha'; },
+        killCam: (x, y, frames) => {
+            if (!killCamEnabled || killCamCooldown > 0 || (killCam && killCam.frames > 0)) return;
+            killCam = { x, y, frames: frames || 90 };
+            killCamCooldown = 600;
+        },
+        setKillCamEnabled: (on) => { killCamEnabled = !!on; if (!on) killCam = null; },
         getCamera: () => followMode,
-        setZoom: (z) => { const v = Number(z); if (isFinite(v)) zoomReq = Math.max(1.3, Math.min(4.5, v)); zoom = effectiveZoom(); },
+        setZoom: (z) => { const v = Number(z); if (isFinite(v)) zoomReq = Math.max(1.3, Math.min(4.5, v)); },
         getZoom: () => zoom,
         getRequestedZoom: () => zoomReq,
         stats: () => ({ segments: lineCount, points: pointCount, hidden: hiddenCount }),
