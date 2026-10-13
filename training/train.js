@@ -64,6 +64,10 @@ function parseArgs(argv) {
         world: 'torus',
         // Sphere only: globe size relative to the 1200x600 chart (R = 191 * scale).
         worldScale: 1,
+        // Optional overrides of the stage's enemy / boss counts, for fleet-sized
+        // training (-1 = use the stage default).
+        enemies: -1,
+        bosses: -1,
         quiet: 0
     };
     for (let i = 0; i < argv.length; i++) {
@@ -86,7 +90,8 @@ const args = parseArgs(typeof arguments !== 'undefined' ? arguments : []);
 
 print(`PPO training  stage=${args.stage}  agents=${args.agents}  iterations=${args.iterations}` +
     `  rollout=${args.rollout}  hidden=[${args.hidden}]  lr=${args.lr}  entropy=${args.entropy}` +
-    (args.fuelRescue ? '  fuelRescue=on' : '') + (args.world === 'sphere' ? '  world=sphere x' + args.worldScale : ''));
+    (args.fuelRescue ? '  fuelRescue=on' : '') + (args.world === 'sphere' ? '  world=sphere x' + args.worldScale : '') +
+    (args.enemies >= 0 || args.bosses >= 0 ? `  enemies=${args.enemies} bosses=${args.bosses}` : ''));
 
 const env = new AsteroidsEnv({
     numAgents: args.agents,
@@ -95,6 +100,8 @@ const env = new AsteroidsEnv({
     fuelRescue: !!args.fuelRescue,
     world: args.world,
     worldScale: args.worldScale,
+    enemies: args.enemies >= 0 ? args.enemies : undefined,
+    bosses: args.bosses >= 0 ? args.bosses : undefined,
     reward: { aimShaping: args.aimShaping }
 });
 

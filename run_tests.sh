@@ -33,6 +33,7 @@ run() {
 run "neural network (gradients, Adam, serialisation)" training/test_nn.js
 run "environment (determinism, rewards, credit)"      training/test_env.js
 run "browser inference path"                          training/test_policy_runner.js
+run "waves and boss phases"                           training/test_waves.js
 
 # Parse-check everything else that ships to the browser, so a syntax error in a
 # file with no test still fails the suite rather than reaching the page.
@@ -43,7 +44,8 @@ for f in theme.js game.js entities.js ai_ship.js enemy_ship.js enemy_coordinatio
          marl_environment.js marl_integration.js marl_data_collector.js \
          ml_model_adapter.js ml_model_loader.js ml_hierarchy.js ml_evaluation.js \
          sim/env.js sim/browser_shim.js training/nn.js training/ppo.js \
-         training/bc.js training/evaluate.js training/train.js; do
+         training/bc.js training/evaluate.js training/train.js training/benchmark.js \
+         training/test_waves.js; do
     [ -f "$f" ] || continue
     if "$JSC" -e "new Function(read('$f'))" >/dev/null 2>&1; then
         echo "  ok    $f"

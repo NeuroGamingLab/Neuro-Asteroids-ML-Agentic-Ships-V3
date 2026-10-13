@@ -36,7 +36,7 @@ PASSTHROUGH = [
     "stage", "agents", "iterations", "rollout", "maxSteps", "seed", "lr",
     "criticLr", "entropy", "epochs", "minibatch", "hidden", "evalEvery",
     "evalEpisodes", "bc", "bcSteps", "bcEpochs", "bcLr", "bcAlpha",
-    "aimShaping", "init", "fuelRescue", "world", "worldScale",
+    "aimShaping", "init", "fuelRescue", "world", "worldScale", "enemies", "bosses",
 ]
 
 
@@ -76,6 +76,10 @@ def build_parser():
                         help="world geometry: flat wrap-around torus (default) or sphere")
     parser.add_argument("--worldScale", type=float, default=1.0,
                         help="sphere only: globe size relative to the 1200x600 chart (2.0 = R 382, 4x surface)")
+    parser.add_argument("--enemies", type=int, default=None,
+                        help="override the stage's enemy count (fleet-sized training)")
+    parser.add_argument("--bosses", type=int, default=None,
+                        help="override the stage's boss count (fleet-sized training)")
     parser.add_argument("--run-name", default=None)
     parser.add_argument("--out-dir", default=os.path.join(REPO_ROOT, "training_runs"))
     parser.add_argument("--model-dir", default=os.path.join(REPO_ROOT, "models"))

@@ -189,6 +189,7 @@ DEFAULTS = {
     "policy_worker": True, "value_heatmap": True, "action_wheels": True,
     "fx_enabled": True, "hud_enabled": True,
     "sfx_enabled": True, "music_enabled": True, "kill_cam_enabled": True,
+    "waves_enabled": True, "boss_phases_enabled": True,
     "world_mode": "Sphere (3D)", "sphere_camera": "Follow Alpha", "sphere_zoom": 4.2, "world_scale": 2.0,
 }
 
@@ -252,6 +253,14 @@ with st.sidebar:
                                     help="Red / purple enemies spawn at the screen edges.")
         num_boss_ships = st.slider("Boss ships", 0, 10, step=1, key="num_boss_ships",
                                    help="Bosses have phases, coordinated attack patterns and shields.")
+        waves_enabled = st.toggle("Escalating waves", key="waves_enabled",
+                                  help=("Turns the sliders above into ceilings. Wave 1 sends about a third of the enemies, "
+                                        "the full count arrives by wave 5, a boss joins every third wave, and each wave "
+                                        "fires faster and flies faster. Clearing a wave pays a bonus. Off: the whole fleet "
+                                        "spawns at once and is never replaced."))
+        boss_phases_enabled = st.toggle("Boss phase mechanics", key="boss_phases_enabled",
+                                        help=("Health bar with phase marks, a banner on each phase change, phase 2 calls in "
+                                              "two escort ships, phase 3 enrages the boss (fires and flies faster)."))
         player_ship_active = st.toggle("Player ship active", key="player_ship_active",
                                        help="The cyan Observer ship. Click the game area, then use the arrow keys.")
         world_mode = st.radio(
@@ -469,7 +478,7 @@ def read_source(path, fallback_comment=None):
         return f"// {fallback_comment or path + ' not found'}\n"
 
 
-def get_game_html(num_ai_ships, num_enemy_ships, num_boss_ships, canvas_width, canvas_height, player_ship_active, ml_enabled, ml_mode="parameters", marl_enabled=False, marl_training=False, alpha_attack_enabled=False, formation_type="arrowhead", auto_assign_roles=True, fuel_rescue_enabled=True, adaptive_formation=False, multi_target_mode="focus", escort_mode="none", tactical_sequences=True, formation_transitions=True, advanced_flanking=True, ml_data_collection=False, ml_hierarchy_enabled=False, ml_evaluation_enabled=False, curriculum_stage=3, nn_models_enabled=False, model_version="1.0.0", multitask_model_path="none", parameter_model_path="none", priority_model_path="none", action_model_path="none", prefer_wasm=True, trained_policy_path="none", trained_policy_enabled=False, trained_policy_deterministic=False, policy_overlay=False, policy_worker=False, value_heatmap=False, action_wheels=False, fx_enabled=True, hud_enabled=True, world_mode="torus", sphere_camera="alpha", sphere_zoom=2.6, world_scale=1.0, telemetry_rate=10, sfx_enabled=True, music_enabled=True, kill_cam_enabled=True):
+def get_game_html(num_ai_ships, num_enemy_ships, num_boss_ships, canvas_width, canvas_height, player_ship_active, ml_enabled, ml_mode="parameters", marl_enabled=False, marl_training=False, alpha_attack_enabled=False, formation_type="arrowhead", auto_assign_roles=True, fuel_rescue_enabled=True, adaptive_formation=False, multi_target_mode="focus", escort_mode="none", tactical_sequences=True, formation_transitions=True, advanced_flanking=True, ml_data_collection=False, ml_hierarchy_enabled=False, ml_evaluation_enabled=False, curriculum_stage=3, nn_models_enabled=False, model_version="1.0.0", multitask_model_path="none", parameter_model_path="none", priority_model_path="none", action_model_path="none", prefer_wasm=True, trained_policy_path="none", trained_policy_enabled=False, trained_policy_deterministic=False, policy_overlay=False, policy_worker=False, value_heatmap=False, action_wheels=False, fx_enabled=True, hud_enabled=True, world_mode="torus", sphere_camera="alpha", sphere_zoom=2.6, world_scale=1.0, telemetry_rate=10, sfx_enabled=True, music_enabled=True, kill_cam_enabled=True, waves_enabled=True, boss_phases_enabled=True):
     # rng.js must be first: game.js calls gameRandom() and resolves it lexically,
     # so loading it later leaves the game with an undefined RNG.
     rng_js = read_source('rng.js', 'rng.js not found - game.js will fail to start')
@@ -713,6 +722,7 @@ def get_game_html(num_ai_ships, num_enemy_ships, num_boss_ships, canvas_width, c
                 <p>H: Hyperspace</p>
                 <p>P: Pause</p>
                 <p>M: Toggle music</p>
+                <p>Waves: clear every hostile to call the next wave; a boss joins every third one</p>
                 <p>ESC: Toggle Fullscreen</p>
                 <br>
                 <p class="credit-line">
@@ -731,6 +741,11 @@ def get_game_html(num_ai_ships, num_enemy_ships, num_boss_ships, canvas_width, c
         {sphere_js}
         {marl_js}
         {js}
+        // Gameplay layers: waves and boss phase mechanics.
+        (function() {{
+            if (typeof setWavesEnabled === 'function') setWavesEnabled({str(waves_enabled).lower()});
+            if (typeof setBossPhasePlusEnabled === 'function') setBossPhasePlusEnabled({str(boss_phases_enabled).lower()});
+        }})();
         // Visual layers (cosmetic; never touch game state).
         (function() {{
             if (typeof setFxEnabled === 'function') setFxEnabled({str(fx_enabled).lower()});
@@ -1142,7 +1157,8 @@ game_html = get_game_html(num_ai_ships, num_enemy_ships, num_boss_ships, canvas_
                           sphere_zoom=sphere_zoom, world_scale=world_scale,
                           telemetry_rate=telemetry_rate,
                           sfx_enabled=sfx_enabled, music_enabled=music_enabled,
-                          kill_cam_enabled=kill_cam_enabled)
+                          kill_cam_enabled=kill_cam_enabled,
+                          waves_enabled=waves_enabled, boss_phases_enabled=boss_phases_enabled)
 # Adjust component dimensions to match canvas + UI elements
 # Height: canvas height + status bar (~40px) + mission control bar (~50px) + controls section (~160px) + padding (~20px)
 component_height = canvas_height + 270

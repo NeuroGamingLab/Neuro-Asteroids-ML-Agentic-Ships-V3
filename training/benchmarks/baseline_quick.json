@@ -1,0 +1,89 @@
+{
+ "format": "asteroids-benchmark",
+ "suite": "quick",
+ "generated": "2026-10-12T23:43:28+00:00",
+ "results": [
+  {
+   "scenario": "s0_torus",
+   "policy": "heuristic",
+   "desc": "asteroids only, flat torus",
+   "maxSteps": 500,
+   "summary": {
+    "meanReturn": 8.314,
+    "ciReturn": 5.04,
+    "meanScore": 1050,
+    "ciScore": 710.3,
+    "meanLength": 500,
+    "meanSurvivors": 3,
+    "episodes": 6,
+    "killsPer1k": {
+     "asteroids": 15.67,
+     "enemies": 0,
+     "bosses": 0
+    }
+   }
+  },
+  {
+   "scenario": "s0_torus",
+   "policy": "random",
+   "desc": "asteroids only, flat torus",
+   "maxSteps": 500,
+   "summary": {
+    "meanReturn": 19.591,
+    "ciReturn": 4.359,
+    "meanScore": 2700,
+    "ciScore": 724.1,
+    "meanLength": 500,
+    "meanSurvivors": 3,
+    "episodes": 6,
+    "killsPer1k": {
+     "asteroids": 36,
+     "enemies": 0,
+     "bosses": 0
+    }
+   }
+  },
+  {
+   "scenario": "s3_sphere",
+   "policy": "heuristic",
+   "desc": "full stage on the x2 globe (app default world)",
+   "maxSteps": 500,
+   "summary": {
+    "meanReturn": 5.637,
+    "ciReturn": 4.043,
+    "meanScore": 1191.7,
+    "ciScore": 535.2,
+    "meanLength": 500,
+    "meanSurvivors": 2.333,
+    "episodes": 6,
+    "killsPer1k": {
+     "asteroids": 4.33,
+     "enemies": 1,
+     "bosses": 1.67
+    }
+   }
+  },
+  {
+   "scenario": "s3_sphere",
+   "policy": "random",
+   "desc": "full stage on the x2 globe (app default world)",
+   "maxSteps": 500,
+   "summary": {
+    "meanReturn": 5.198,
+    "ciReturn": 4.981,
+    "meanScore": 758.3,
+    "ciScore": 582.2,
+    "meanLength": 500,
+    "meanSurvivors": 2.5,
+    "episodes": 6,
+    "killsPer1k": {
+     "asteroids": 9.67,
+     "enemies": 1.33,
+     "bosses": 0.33
+    }
+   }
+  }
+ ],
+ "paired": [],
+ "skipped": []
+}

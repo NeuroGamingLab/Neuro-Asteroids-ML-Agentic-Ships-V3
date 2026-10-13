@@ -734,6 +734,7 @@ class EnemyShip {
             this.phaseTransitionTimer = 60; // 1 second transition effect
             this.shieldActive = true;
             this.shieldDuration = 30; // Brief invincibility on phase change
+            if (typeof onBossPhaseChange === 'function') onBossPhaseChange(this, oldPhase, this.bossPhase);
         }
     }
     

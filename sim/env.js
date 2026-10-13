@@ -90,6 +90,15 @@
             this.numAgents = options.numAgents || 3;
             this.maxSteps = options.maxSteps || 1000;
             this.curriculumStage = options.curriculumStage || 0;
+            // Optional overrides of the stage's enemy / boss counts, so benchmark
+            // scenarios can ask for a bigger fleet without a new curriculum stage.
+            // Gameplay layers that are off for training by default so that results
+            // stay comparable with earlier runs: escalating waves, and the boss
+            // escort / enrage mechanics.
+            this.waves = !!options.waves;
+            this.bossPhases = !!options.bossPhases;
+            this.enemiesOverride = Number.isFinite(options.enemies) ? options.enemies : null;
+            this.bossesOverride = Number.isFinite(options.bosses) ? options.bosses : null;
             this.reward = Object.assign({}, DEFAULT_REWARD, options.reward || {});
             // With fuel rescue on, one of the ships becomes the scripted tanker and
             // the observation gains the five fuel features.
@@ -99,6 +108,7 @@
             this.featureNames = this.fuelRescue ? RL_FEATURE_NAMES_FUEL : RL_FEATURE_NAMES;
             this.actionSize = ACTION_SPACE_SIZE;
             this.fuelStats = { refuels: 0, dockDeaths: 0, lowFuelFrames: 0 };
+            this.killStats = { asteroids: 0, enemies: 0, bosses: 0 };
             // 'torus' (default) or 'sphere'. Requires world.js to be loaded; the
             // observation layout is unchanged, but the chart-space relative
             // features are distorted near the poles, so policies trained on one
@@ -138,13 +148,18 @@
             playerShipActive = false;
 
             numAIShips = this.numAgents;
-            numEnemyShips = stage.enemies;
-            numBossShips = stage.bosses;
+            numEnemyShips = this.enemiesOverride !== null ? this.enemiesOverride : stage.enemies;
+            numBossShips = this.bossesOverride !== null ? this.bossesOverride : stage.bosses;
             if (typeof root.marlCurriculumStage !== 'undefined') {
                 root.marlCurriculumStage = this.curriculumStage;
             }
 
             marlEnabledSafeOff();
+
+            // Set explicitly on every reset: game.js defaults both on in a browser
+            // and a previous env instance may have left them either way.
+            wavesEnabled = this.waves;
+            bossPhasePlusEnabled = this.bossPhases;
 
             // The fuel mechanic requires the alpha formation. Set both flags
             // explicitly either way so a stale browser default cannot leak in.
@@ -171,6 +186,7 @@
             this.episodeTaskReturn = [];
             this.lastFeatures = [];
             this.fuelStats = { refuels: 0, dockDeaths: 0, lowFuelFrames: 0 };
+            this.killStats = { asteroids: 0, enemies: 0, bosses: 0 };
             for (let i = 0; i < this.numAgents; i++) {
                 const shipRef = this.shipFor(i);
                 this.prevHealth.push(shipRef ? shipRef.health : 0);
@@ -267,6 +283,9 @@
             let teamValue = 0;
             for (let i = 0; i < credit.length; i++) {
                 if (!credit[i]) continue;
+                this.killStats.asteroids += credit[i].asteroidKills;
+                this.killStats.enemies += credit[i].enemyKills;
+                this.killStats.bosses += credit[i].bossKills;
                 teamValue += credit[i].asteroidKills * R.asteroidKill * stage.asteroidWeight
                     + credit[i].enemyKills * R.enemyKill * stage.enemyWeight
                     + credit[i].bossKills * R.bossKill * stage.bossWeight;
@@ -411,6 +430,8 @@
                     episodeReturn: this.episodeReturn.slice(),
                     episodeTaskReturn: this.episodeTaskReturn.slice(),
                     timeLimit: this.stepCount >= this.maxSteps && anyAlive,
+                    kills: Object.assign({}, this.killStats),
+                    wave: waveState.wave,
                     fuel: this.fuelRescue ? Object.assign({}, this.fuelStats) : null
                 }
             };
