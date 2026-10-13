@@ -1,0 +1,1119 @@
+{
+ "results": [
+  {
+   "scenario": "s0_torus",
+   "policy": "heuristic",
+   "desc": "asteroids only, flat torus",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 15.799,
+    "ciReturn": 2.047,
+    "meanScore": 2085,
+    "ciScore": 326.6,
+    "meanLength": 1000,
+    "meanSurvivors": 3,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 14.85,
+     "enemies": 0,
+     "bosses": 0
+    }
+   }
+  },
+  {
+   "scenario": "s0_torus",
+   "policy": "random",
+   "desc": "asteroids only, flat torus",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 42.317,
+    "ciReturn": 3.168,
+    "meanScore": 5483.8,
+    "ciScore": 484,
+    "meanLength": 1000,
+    "meanSurvivors": 2.975,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 39.3,
+     "enemies": 0,
+     "bosses": 0
+    }
+   }
+  },
+  {
+   "scenario": "s0_torus",
+   "policy": "seed0_stageswarm",
+   "desc": "asteroids only, flat torus",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 73.39,
+    "ciReturn": 5.019,
+    "meanScore": 9891.3,
+    "ciScore": 722,
+    "meanLength": 1000,
+    "meanSurvivors": 2.85,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 71,
+     "enemies": 0,
+     "bosses": 0
+    }
+   }
+  },
+  {
+   "scenario": "s0_torus",
+   "policy": "seed1_stageswarm",
+   "desc": "asteroids only, flat torus",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 54.094,
+    "ciReturn": 4.199,
+    "meanScore": 6982.5,
+    "ciScore": 557.4,
+    "meanLength": 1000,
+    "meanSurvivors": 2.95,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 51.3,
+     "enemies": 0,
+     "bosses": 0
+    }
+   }
+  },
+  {
+   "scenario": "s0_torus",
+   "policy": "seed2_stageswarm",
+   "desc": "asteroids only, flat torus",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 73.14,
+    "ciReturn": 3.483,
+    "meanScore": 9591.3,
+    "ciScore": 543.3,
+    "meanLength": 1000,
+    "meanSurvivors": 2.95,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 70.25,
+     "enemies": 0,
+     "bosses": 0
+    }
+   }
+  },
+  {
+   "scenario": "s0_torus",
+   "policy": "seed3_stageswarm",
+   "desc": "asteroids only, flat torus",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 73.865,
+    "ciReturn": 4.719,
+    "meanScore": 9962.5,
+    "ciScore": 681.3,
+    "meanLength": 1000,
+    "meanSurvivors": 2.85,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 72.05,
+     "enemies": 0,
+     "bosses": 0
+    }
+   }
+  },
+  {
+   "scenario": "s0_torus",
+   "policy": "policy_stage0",
+   "desc": "asteroids only, flat torus",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 44.378,
+    "ciReturn": 2.527,
+    "meanScore": 5912.5,
+    "ciScore": 418.8,
+    "meanLength": 1000,
+    "meanSurvivors": 3,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 41.53,
+     "enemies": 0,
+     "bosses": 0
+    }
+   }
+  },
+  {
+   "scenario": "s0_torus",
+   "policy": "policy_stage3",
+   "desc": "asteroids only, flat torus",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 43.702,
+    "ciReturn": 2.626,
+    "meanScore": 5535,
+    "ciScore": 402.3,
+    "meanLength": 1000,
+    "meanSurvivors": 3,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 40.63,
+     "enemies": 0,
+     "bosses": 0
+    }
+   }
+  },
+  {
+   "scenario": "s0_torus",
+   "policy": "policy_stage0_sphere_x2",
+   "desc": "asteroids only, flat torus",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 42.527,
+    "ciReturn": 2.617,
+    "meanScore": 5458.8,
+    "ciScore": 391.7,
+    "meanLength": 1000,
+    "meanSurvivors": 2.975,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 39.6,
+     "enemies": 0,
+     "bosses": 0
+    }
+   }
+  },
+  {
+   "scenario": "s3_torus",
+   "policy": "heuristic",
+   "desc": "asteroids + enemies + boss, flat torus",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 7.052,
+    "ciReturn": 2.733,
+    "meanScore": 1762.5,
+    "ciScore": 446.7,
+    "meanLength": 891.4,
+    "meanSurvivors": 1.725,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 10.75,
+     "enemies": 1.4,
+     "bosses": 0.3
+    }
+   }
+  },
+  {
+   "scenario": "s3_torus",
+   "policy": "random",
+   "desc": "asteroids + enemies + boss, flat torus",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 20.733,
+    "ciReturn": 3.567,
+    "meanScore": 4157.5,
+    "ciScore": 583.6,
+    "meanLength": 954.1,
+    "meanSurvivors": 1.9,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 27.34,
+     "enemies": 1.42,
+     "bosses": 0.35
+    }
+   }
+  },
+  {
+   "scenario": "s3_torus",
+   "policy": "seed0_stageswarm",
+   "desc": "asteroids + enemies + boss, flat torus",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 47.38,
+    "ciReturn": 4.443,
+    "meanScore": 9368.8,
+    "ciScore": 860.4,
+    "meanLength": 970.2,
+    "meanSurvivors": 2.375,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 63.39,
+     "enemies": 1.67,
+     "bosses": 0.53
+    }
+   }
+  },
+  {
+   "scenario": "s3_torus",
+   "policy": "seed1_stageswarm",
+   "desc": "asteroids + enemies + boss, flat torus",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 49.523,
+    "ciReturn": 3.961,
+    "meanScore": 9888.8,
+    "ciScore": 630.5,
+    "meanLength": 987.9,
+    "meanSurvivors": 2.25,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 67.66,
+     "enemies": 1.39,
+     "bosses": 0.5
+    }
+   }
+  },
+  {
+   "scenario": "s3_torus",
+   "policy": "seed2_stageswarm",
+   "desc": "asteroids + enemies + boss, flat torus",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 46.049,
+    "ciReturn": 5.124,
+    "meanScore": 9278.8,
+    "ciScore": 933.3,
+    "meanLength": 961.9,
+    "meanSurvivors": 2.225,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 63.61,
+     "enemies": 1.54,
+     "bosses": 0.55
+    }
+   }
+  },
+  {
+   "scenario": "s3_torus",
+   "policy": "seed3_stageswarm",
+   "desc": "asteroids + enemies + boss, flat torus",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 45.626,
+    "ciReturn": 4.914,
+    "meanScore": 9285,
+    "ciScore": 858,
+    "meanLength": 961.8,
+    "meanSurvivors": 2.2,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 63.13,
+     "enemies": 1.6,
+     "bosses": 0.49
+    }
+   }
+  },
+  {
+   "scenario": "s3_torus",
+   "policy": "policy_stage0",
+   "desc": "asteroids + enemies + boss, flat torus",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 16.863,
+    "ciReturn": 4.303,
+    "meanScore": 3807.5,
+    "ciScore": 679.1,
+    "meanLength": 859.8,
+    "meanSurvivors": 1.375,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 28.17,
+     "enemies": 1.09,
+     "bosses": 0.26
+    }
+   }
+  },
+  {
+   "scenario": "s3_torus",
+   "policy": "policy_stage3",
+   "desc": "asteroids + enemies + boss, flat torus",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 23.013,
+    "ciReturn": 3.849,
+    "meanScore": 4575,
+    "ciScore": 612.5,
+    "meanLength": 945.3,
+    "meanSurvivors": 1.825,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 31.63,
+     "enemies": 1.55,
+     "bosses": 0.33
+    }
+   }
+  },
+  {
+   "scenario": "s3_torus",
+   "policy": "policy_stage0_sphere_x2",
+   "desc": "asteroids + enemies + boss, flat torus",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 24.604,
+    "ciReturn": 3.273,
+    "meanScore": 4720,
+    "ciScore": 505.8,
+    "meanLength": 943.8,
+    "meanSurvivors": 2,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 33.04,
+     "enemies": 1.53,
+     "bosses": 0.36
+    }
+   }
+  },
+  {
+   "scenario": "s3_sphere",
+   "policy": "heuristic",
+   "desc": "full stage on the x2 globe (app default world)",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 4.617,
+    "ciReturn": 1.737,
+    "meanScore": 1070,
+    "ciScore": 260.5,
+    "meanLength": 977.8,
+    "meanSurvivors": 2,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 5.54,
+     "enemies": 1.04,
+     "bosses": 0.23
+    }
+   }
+  },
+  {
+   "scenario": "s3_sphere",
+   "policy": "random",
+   "desc": "full stage on the x2 globe (app default world)",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 11.917,
+    "ciReturn": 2.057,
+    "meanScore": 1950,
+    "ciScore": 301.6,
+    "meanLength": 999.9,
+    "meanSurvivors": 2.225,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 12.8,
+     "enemies": 1.3,
+     "bosses": 0.15
+    }
+   }
+  },
+  {
+   "scenario": "s3_sphere",
+   "policy": "seed0_stageswarm",
+   "desc": "full stage on the x2 globe (app default world)",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 29.545,
+    "ciReturn": 3.481,
+    "meanScore": 5207.5,
+    "ciScore": 623.6,
+    "meanLength": 1000,
+    "meanSurvivors": 2.35,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 34.67,
+     "enemies": 1.55,
+     "bosses": 0.48
+    }
+   }
+  },
+  {
+   "scenario": "s3_sphere",
+   "policy": "seed1_stageswarm",
+   "desc": "full stage on the x2 globe (app default world)",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 28.719,
+    "ciReturn": 3.272,
+    "meanScore": 5361.3,
+    "ciScore": 576.7,
+    "meanLength": 1000,
+    "meanSurvivors": 2.225,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 36.78,
+     "enemies": 1.53,
+     "bosses": 0.28
+    }
+   }
+  },
+  {
+   "scenario": "s3_sphere",
+   "policy": "seed2_stageswarm",
+   "desc": "full stage on the x2 globe (app default world)",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 29.701,
+    "ciReturn": 3.058,
+    "meanScore": 5383.8,
+    "ciScore": 636.1,
+    "meanLength": 1000,
+    "meanSurvivors": 2.3,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 36.75,
+     "enemies": 1.58,
+     "bosses": 0.33
+    }
+   }
+  },
+  {
+   "scenario": "s3_sphere",
+   "policy": "seed3_stageswarm",
+   "desc": "full stage on the x2 globe (app default world)",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 30.114,
+    "ciReturn": 3.656,
+    "meanScore": 5816.3,
+    "ciScore": 654.6,
+    "meanLength": 981.5,
+    "meanSurvivors": 2.075,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 40.27,
+     "enemies": 1.44,
+     "bosses": 0.28
+    }
+   }
+  },
+  {
+   "scenario": "s3_sphere",
+   "policy": "policy_stage0",
+   "desc": "full stage on the x2 globe (app default world)",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 11.727,
+    "ciReturn": 2.048,
+    "meanScore": 1790,
+    "ciScore": 288.6,
+    "meanLength": 993.6,
+    "meanSurvivors": 2.35,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 12.4,
+     "enemies": 1.03,
+     "bosses": 0.1
+    }
+   }
+  },
+  {
+   "scenario": "s3_sphere",
+   "policy": "policy_stage3",
+   "desc": "full stage on the x2 globe (app default world)",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 13.319,
+    "ciReturn": 1.58,
+    "meanScore": 1748.8,
+    "ciScore": 237.6,
+    "meanLength": 994.9,
+    "meanSurvivors": 2.65,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 10.51,
+     "enemies": 1.38,
+     "bosses": 0.3
+    }
+   }
+  },
+  {
+   "scenario": "s3_sphere",
+   "policy": "policy_stage0_sphere_x2",
+   "desc": "full stage on the x2 globe (app default world)",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 17.659,
+    "ciReturn": 2.028,
+    "meanScore": 3008.8,
+    "ciScore": 406.1,
+    "meanLength": 991.4,
+    "meanSurvivors": 2.5,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 19.61,
+     "enemies": 1.36,
+     "bosses": 0.18
+    }
+   }
+  },
+  {
+   "scenario": "swarm_sphere",
+   "policy": "heuristic",
+   "desc": "6 agents vs 4 enemies + 2 bosses on the x2 globe",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 5.831,
+    "ciReturn": 1.552,
+    "meanScore": 2655,
+    "ciScore": 435.1,
+    "meanLength": 993.6,
+    "meanSurvivors": 3.5,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 11.5,
+     "enemies": 2.63,
+     "bosses": 0.83
+    }
+   }
+  },
+  {
+   "scenario": "swarm_sphere",
+   "policy": "random",
+   "desc": "6 agents vs 4 enemies + 2 bosses on the x2 globe",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 13.16,
+    "ciReturn": 1.629,
+    "meanScore": 4755,
+    "ciScore": 462.2,
+    "meanLength": 1000,
+    "meanSurvivors": 3.675,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 26.53,
+     "enemies": 3.35,
+     "bosses": 0.83
+    }
+   }
+  },
+  {
+   "scenario": "swarm_sphere",
+   "policy": "seed0_stageswarm",
+   "desc": "6 agents vs 4 enemies + 2 bosses on the x2 globe",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 33.024,
+    "ciReturn": 2.648,
+    "meanScore": 11946.3,
+    "ciScore": 972.9,
+    "meanLength": 1000,
+    "meanSurvivors": 4.625,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 73.68,
+     "enemies": 3.7,
+     "bosses": 1.58
+    }
+   }
+  },
+  {
+   "scenario": "swarm_sphere",
+   "policy": "seed1_stageswarm",
+   "desc": "6 agents vs 4 enemies + 2 bosses on the x2 globe",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 29.193,
+    "ciReturn": 2.85,
+    "meanScore": 10562.5,
+    "ciScore": 966.7,
+    "meanLength": 1000,
+    "meanSurvivors": 4.575,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 66.03,
+     "enemies": 3.45,
+     "bosses": 1.23
+    }
+   }
+  },
+  {
+   "scenario": "swarm_sphere",
+   "policy": "seed2_stageswarm",
+   "desc": "6 agents vs 4 enemies + 2 bosses on the x2 globe",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 28.83,
+    "ciReturn": 2.266,
+    "meanScore": 10188.8,
+    "ciScore": 865.7,
+    "meanLength": 1000,
+    "meanSurvivors": 4.625,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 65.72,
+     "enemies": 3.68,
+     "bosses": 1.13
+    }
+   }
+  },
+  {
+   "scenario": "swarm_sphere",
+   "policy": "seed3_stageswarm",
+   "desc": "6 agents vs 4 enemies + 2 bosses on the x2 globe",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 30.362,
+    "ciReturn": 2.407,
+    "meanScore": 11508.8,
+    "ciScore": 795,
+    "meanLength": 992.1,
+    "meanSurvivors": 4.375,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 72.98,
+     "enemies": 3.65,
+     "bosses": 1.21
+    }
+   }
+  },
+  {
+   "scenario": "swarm_sphere",
+   "policy": "policy_stage0",
+   "desc": "6 agents vs 4 enemies + 2 bosses on the x2 globe",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 11.05,
+    "ciReturn": 1.964,
+    "meanScore": 3892.5,
+    "ciScore": 502,
+    "meanLength": 955.5,
+    "meanSurvivors": 3.775,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 22.15,
+     "enemies": 2.86,
+     "bosses": 0.72
+    }
+   }
+  },
+  {
+   "scenario": "swarm_sphere",
+   "policy": "policy_stage3",
+   "desc": "6 agents vs 4 enemies + 2 bosses on the x2 globe",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 11.903,
+    "ciReturn": 1.477,
+    "meanScore": 3427.5,
+    "ciScore": 393,
+    "meanLength": 988.5,
+    "meanSurvivors": 4.475,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 16.06,
+     "enemies": 3.16,
+     "bosses": 1.02
+    }
+   }
+  },
+  {
+   "scenario": "swarm_sphere",
+   "policy": "policy_stage0_sphere_x2",
+   "desc": "6 agents vs 4 enemies + 2 bosses on the x2 globe",
+   "maxSteps": 1000,
+   "summary": {
+    "meanReturn": 15.74,
+    "ciReturn": 2.024,
+    "meanScore": 5596.3,
+    "ciScore": 585.4,
+    "meanLength": 995.1,
+    "meanSurvivors": 3.975,
+    "episodes": 40,
+    "killsPer1k": {
+     "asteroids": 32.67,
+     "enemies": 3.37,
+     "bosses": 0.83
+    }
+   }
+  }
+ ],
+ "paired": [
+  {
+   "scenario": "s0_torus",
+   "policy": "seed0_stageswarm",
+   "vsHeuristic": {
+    "diff": 57.591,
+    "t": 20.75,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": 31.072,
+    "t": 9.44,
+    "significant": true
+   }
+  },
+  {
+   "scenario": "s0_torus",
+   "policy": "seed1_stageswarm",
+   "vsHeuristic": {
+    "diff": 38.295,
+    "t": 17.53,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": 11.776,
+    "t": 5,
+    "significant": true
+   }
+  },
+  {
+   "scenario": "s0_torus",
+   "policy": "seed2_stageswarm",
+   "vsHeuristic": {
+    "diff": 57.342,
+    "t": 28.02,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": 30.823,
+    "t": 15.96,
+    "significant": true
+   }
+  },
+  {
+   "scenario": "s0_torus",
+   "policy": "seed3_stageswarm",
+   "vsHeuristic": {
+    "diff": 58.067,
+    "t": 24.9,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": 31.548,
+    "t": 11.89,
+    "significant": true
+   }
+  },
+  {
+   "scenario": "s0_torus",
+   "policy": "policy_stage0",
+   "vsHeuristic": {
+    "diff": 28.579,
+    "t": 16.99,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": 2.06,
+    "t": 1.03,
+    "significant": false
+   }
+  },
+  {
+   "scenario": "s0_torus",
+   "policy": "policy_stage3",
+   "vsHeuristic": {
+    "diff": 27.903,
+    "t": 16.86,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": 1.385,
+    "t": 0.64,
+    "significant": false
+   }
+  },
+  {
+   "scenario": "s0_torus",
+   "policy": "policy_stage0_sphere_x2",
+   "vsHeuristic": {
+    "diff": 26.728,
+    "t": 16.14,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": 0.209,
+    "t": 0.09,
+    "significant": false
+   }
+  },
+  {
+   "scenario": "s3_torus",
+   "policy": "seed0_stageswarm",
+   "vsHeuristic": {
+    "diff": 40.328,
+    "t": 16.89,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": 26.646,
+    "t": 9.57,
+    "significant": true
+   }
+  },
+  {
+   "scenario": "s3_torus",
+   "policy": "seed1_stageswarm",
+   "vsHeuristic": {
+    "diff": 42.471,
+    "t": 16.46,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": 28.79,
+    "t": 10.71,
+    "significant": true
+   }
+  },
+  {
+   "scenario": "s3_torus",
+   "policy": "seed2_stageswarm",
+   "vsHeuristic": {
+    "diff": 38.997,
+    "t": 12.97,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": 25.316,
+    "t": 8.43,
+    "significant": true
+   }
+  },
+  {
+   "scenario": "s3_torus",
+   "policy": "seed3_stageswarm",
+   "vsHeuristic": {
+    "diff": 38.574,
+    "t": 15.95,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": 24.893,
+    "t": 9.05,
+    "significant": true
+   }
+  },
+  {
+   "scenario": "s3_torus",
+   "policy": "policy_stage0",
+   "vsHeuristic": {
+    "diff": 9.811,
+    "t": 3.67,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": -3.87,
+    "t": -1.47,
+    "significant": false
+   }
+  },
+  {
+   "scenario": "s3_torus",
+   "policy": "policy_stage3",
+   "vsHeuristic": {
+    "diff": 15.961,
+    "t": 6.99,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": 2.28,
+    "t": 0.86,
+    "significant": false
+   }
+  },
+  {
+   "scenario": "s3_torus",
+   "policy": "policy_stage0_sphere_x2",
+   "vsHeuristic": {
+    "diff": 17.553,
+    "t": 9.37,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": 3.871,
+    "t": 1.74,
+    "significant": false
+   }
+  },
+  {
+   "scenario": "s3_sphere",
+   "policy": "seed0_stageswarm",
+   "vsHeuristic": {
+    "diff": 24.929,
+    "t": 12.38,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": 17.628,
+    "t": 8.44,
+    "significant": true
+   }
+  },
+  {
+   "scenario": "s3_sphere",
+   "policy": "seed1_stageswarm",
+   "vsHeuristic": {
+    "diff": 24.102,
+    "t": 13.4,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": 16.802,
+    "t": 9.54,
+    "significant": true
+   }
+  },
+  {
+   "scenario": "s3_sphere",
+   "policy": "seed2_stageswarm",
+   "vsHeuristic": {
+    "diff": 25.084,
+    "t": 18.27,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": 17.784,
+    "t": 9.9,
+    "significant": true
+   }
+  },
+  {
+   "scenario": "s3_sphere",
+   "policy": "seed3_stageswarm",
+   "vsHeuristic": {
+    "diff": 25.498,
+    "t": 12.01,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": 18.197,
+    "t": 8.37,
+    "significant": true
+   }
+  },
+  {
+   "scenario": "s3_sphere",
+   "policy": "policy_stage0",
+   "vsHeuristic": {
+    "diff": 7.111,
+    "t": 5.1,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": -0.19,
+    "t": -0.13,
+    "significant": false
+   }
+  },
+  {
+   "scenario": "s3_sphere",
+   "policy": "policy_stage3",
+   "vsHeuristic": {
+    "diff": 8.702,
+    "t": 7.68,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": 1.402,
+    "t": 1.17,
+    "significant": false
+   }
+  },
+  {
+   "scenario": "s3_sphere",
+   "policy": "policy_stage0_sphere_x2",
+   "vsHeuristic": {
+    "diff": 13.043,
+    "t": 10.47,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": 5.742,
+    "t": 4.54,
+    "significant": true
+   }
+  },
+  {
+   "scenario": "swarm_sphere",
+   "policy": "seed0_stageswarm",
+   "vsHeuristic": {
+    "diff": 27.193,
+    "t": 17.58,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": 19.864,
+    "t": 12.99,
+    "significant": true
+   }
+  },
+  {
+   "scenario": "swarm_sphere",
+   "policy": "seed1_stageswarm",
+   "vsHeuristic": {
+    "diff": 23.362,
+    "t": 17.73,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": 16.033,
+    "t": 10.43,
+    "significant": true
+   }
+  },
+  {
+   "scenario": "swarm_sphere",
+   "policy": "seed2_stageswarm",
+   "vsHeuristic": {
+    "diff": 22.999,
+    "t": 17.17,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": 15.671,
+    "t": 12.95,
+    "significant": true
+   }
+  },
+  {
+   "scenario": "swarm_sphere",
+   "policy": "seed3_stageswarm",
+   "vsHeuristic": {
+    "diff": 24.53,
+    "t": 17.75,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": 17.202,
+    "t": 11.14,
+    "significant": true
+   }
+  },
+  {
+   "scenario": "swarm_sphere",
+   "policy": "policy_stage0",
+   "vsHeuristic": {
+    "diff": 5.219,
+    "t": 3.63,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": -2.11,
+    "t": -1.56,
+    "significant": false
+   }
+  },
+  {
+   "scenario": "swarm_sphere",
+   "policy": "policy_stage3",
+   "vsHeuristic": {
+    "diff": 6.072,
+    "t": 5.51,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": -1.256,
+    "t": -1.09,
+    "significant": false
+   }
+  },
+  {
+   "scenario": "swarm_sphere",
+   "policy": "policy_stage0_sphere_x2",
+   "vsHeuristic": {
+    "diff": 9.908,
+    "t": 7.84,
+    "significant": true
+   },
+   "vsRandom": {
+    "diff": 2.58,
+    "t": 2.03,
+    "significant": true
+   }
+  }
+ ],
+ "note": "suite=full, seedBase=1500000 (disjoint from training seeds and from the seeds used for the first report), 40 episodes per scenario/policy"
+}

@@ -106,7 +106,10 @@
         (async function () {
             if (location.protocol === 'file:') return;
             try {
-                await loadTrainedPolicy('models/policy_stage0.json');
+                // Newest curriculum checkpoint first (trained on the x2 globe this page
+                // defaults to); fall back to the older torus checkpoint if it is missing.
+                try { await loadTrainedPolicy('models/policy_swarm_sphere_x2.json'); }
+                catch (e) { await loadTrainedPolicy('models/policy_stage0.json'); }
                 setTrainedPolicyEnabled(true, false);
                 setPolicyOverlay(true);
                 setValueHeatmap(true);
