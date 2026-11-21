@@ -13,9 +13,9 @@
 
 **Asteroids AI** is a deterministic multi-agent reinforcement learning (MARL) combat simulator and 3D/2D arcade environment built with **zero-dependency JavaScript**, **Three.js**, and **Streamlit**.
 
-- **Exact Spherical & Toroidal Physics (`world.js`, `sphere_view.js`)**: Play and train on a classic 2D flat torus or a 3D spherical globe (`2×` default scale) where ships, asteroids, and projectiles follow great circles with parallel-transported headings and geodesic observations (`WORLD.delta()` / `WORLD.distance()`).
-- **Train/Serve Parity (`sim/env.js`, `training/nn.js`, `policy_runner.js`, `policy_worker.js`)**: Headless PPO/MAPPO training executes the *exact* `game.js` loop and `MLFeatureExtractor.extractRL()` pipeline, and browser inference executes the *exact* `training/nn.js` forward pass inside a Web Worker—eliminating model-conversion drift.
-- **Tactical Swarm & Combat Mechanics (`ai_ship.js`, `enemy_ship.js`, `enemy_coordination.js`)**: Alpha leader formations, autonomous mid-combat fuel tanker rescues, escalating waves, 3-phase boss encounters (escorts + enrage), Mission Control orbital interventions, live HUD sparklines, action-probability wheels, and critic value heatmaps.
+- **Exact Spherical & Toroidal Physics (`world.js`, `sphere_view.js`)**: Play and train on a classic 2D flat torus or an interactive 3D spherical globe (`2×` default scale) with mouse drag-to-orbit, scroll-wheel zoom, click-to-inspect ship HUD cards, great-circle motion, and geodesic observations (`WORLD.delta()` / `WORLD.distance()`).
+- **Train/Serve Parity (`sim/env.js`, `training/nn.js`, `policy_runner.js`, `policy_worker.js`)**: Headless PPO/MAPPO training (flat 48-action or factored 11-logit multi-discrete, optional `EntityAttentionNet` 103-dim encoder, centralized critic, and VDN/COMA credit) executes the *exact* `game.js` loop and `MLFeatureExtractor.extractRL()` pipeline, while browser inference runs the *exact* `training/nn.js` forward pass in a Web Worker.
+- **Tactical Swarm & Combat Mechanics (`ai_ship.js`, `enemy_ship.js`, `enemy_coordination.js`)**: Alpha leader formations, autonomous mid-combat fuel tanker rescues with obstacle avoidance, escalating waves, 3-phase boss encounters (escorts + enrage), Mission Control orbital interventions, live HUD sparklines, action-probability wheels, 2D/3D critic value heatmaps, and 3D attention sightlines.
 
 ---
 
@@ -32,7 +32,7 @@
 ```bash
 python3 -m http.server 8000
 ```
-- **Main Simulator**: `http://localhost:8000` (URL params: `?world=sphere|torus`, `?scale=1..3`, `?cam=alpha|fleet|boss|orbit`, `?zoom=1.4..4.5`)
+- **Main Simulator**: `http://localhost:8000` (URL params: `?world=sphere|torus`, `?scale=1..3`, `?cam=alpha|fleet|boss|orbit`, `?zoom=1.4..4.5`, `?seed=<str>`, `?policy=none|<path>`, `?waves=0|1`, `?det=1`, `?heatmap=0`, `?overlay=0`, `?hud=0`)
 - **Split-Screen A/B Policy Arena**: `http://localhost:8000/arena.html`
 - **Flight Log Replay Scrubber**: `http://localhost:8000/replay.html`
 
@@ -68,8 +68,9 @@ All training and evaluation runs headlessly on macOS `JavaScriptCore` (`jsc`) or
 | `python3 training/run_self_play.py --rounds 4` | Train adversarial Red Swarm policies against a Blue league |
 | `python3 training/update_registry.py` | Refresh `models/registry.json` metadata catalog |
 
-### Curriculum Benchmark Highlights (`r1`, 40 Held-Out Seeds)
-- On the fleet-sized **`swarm_sphere`** scenario (6 agents vs. 4 enemies + 2 bosses on the 2× globe), the trained PPO curriculum policy achieves **2.5× random** and **5.7× rule-based heuristic** return (paired $t = 5.0\text{–}16.0$), doubling boss kills per 1k steps while keeping 4.6/6 ships alive.
+### Benchmark Highlights
+- **Curriculum `r1` (`swarm_sphere`, 40 Held-Out Seeds)**: 6 agents vs. 4 enemies + 2 bosses on the 2× globe — the trained PPO curriculum policy (`models/policy_swarm_sphere_x2.json`) achieves **2.5× random** and **5.7× rule-based heuristic** return (paired $t = 5.0\text{–}16.0$), doubling boss kills per 1k steps while keeping 4.6/6 ships alive.
+- **43-Dim Full-Feature Policy (`models/policy_stage3_sphere_x2_fuel_waves.json`, 12 Held-Out Seeds)**: Fine-tuned with `fuelRescue=on`, `waves=on`, and `bossPhases=on` on `sphere x2`, lifting held-out return from **25.88 → 28.16** (**11,367** score vs. heuristic **1,571**, $t = 8.90$, and random **3,821**, $t = 5.65$).
 - Full methodology and numbers: [RL_TRAINING.md](RL_TRAINING.md) and [training/README.md](training/README.md).
 
 ---
@@ -84,8 +85,8 @@ All training and evaluation runs headlessly on macOS `JavaScriptCore` (`jsc`) or
 | `entities.js`, `ai_ship.js`, `enemy_ship.js`, `enemy_coordination.js` | Fleet entities, Alpha formations, tanker rescue, enemy wave/boss coordination |
 | `ml_features.js`, `policy_runner.js`, `policy_worker.js`, `policy_viz.js` | Geodesic/entity-token feature extractor, Web Worker inference, heatmaps & action wheels |
 | `sim/env.js`, `sim/runtime_shim.js`, `training/` | Headless Gym env, cross-platform JS shim, PPO/MAPPO/Entity-Attention trainer & self-play |
-| `ml-app-enhancement-reviews/` | Architecture & ML enhancement reviews (`v1.0.0`, `v2.0.0`) |
-| `STORY.md`, `SECURITY_GUIDE.md`, `terraform/aws/` | Narrative lore, security posture, and AWS EC2 Terraform infrastructure |
+| `docs/INDEX.md`, `ml-app-enhancement-reviews/` | Documentation index and architecture/ML enhancement reviews (`v1.0.0`, `v2.0.0`) |
+| `STORY.md`, `SECURITY_GUIDE.md`, `docker-compose.yml`, `terraform/aws/` | Narrative lore, security posture, Docker/Caddy HTTPS deployment, and AWS EC2 Terraform infrastructure |
 
 ---
 
