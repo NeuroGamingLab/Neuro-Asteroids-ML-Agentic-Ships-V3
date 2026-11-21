@@ -2983,6 +2983,7 @@ function drawPauseOverlay() {
 // canvas; `ctx` is the transparent overlay above it and only carries
 // screen-space layers (HUD, policy labels, minimap).
 function drawSphereFrame() {
+    if (typeof updateValueHeatmap === 'function') updateValueHeatmap();
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     SphereView.render({
         aiShips: aiShips,

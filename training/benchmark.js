@@ -29,16 +29,18 @@ globalThis.draw = function () {};
 // Scenario ids are stable: they key the stored baseline, so renaming one is a
 // breaking change to the regression gate.
 const SCENARIOS = {
-    s0_torus:        { stage: 0, agents: 3, world: 'torus',  worldScale: 1, desc: 'asteroids only, flat torus' },
-    s3_torus:        { stage: 3, agents: 3, world: 'torus',  worldScale: 1, desc: 'asteroids + enemies + boss, flat torus' },
-    s3_sphere:       { stage: 3, agents: 3, world: 'sphere', worldScale: 2, desc: 'full stage on the x2 globe (app default world)' },
-    swarm_sphere:    { stage: 3, agents: 6, world: 'sphere', worldScale: 2, enemies: 4, bosses: 2, desc: '6 agents vs 4 enemies + 2 bosses on the x2 globe' }
+    s0_torus:          { stage: 0, agents: 3, world: 'torus',  worldScale: 1, desc: 'asteroids only, flat torus' },
+    s3_torus:          { stage: 3, agents: 3, world: 'torus',  worldScale: 1, desc: 'asteroids + enemies + boss, flat torus' },
+    s3_sphere:         { stage: 3, agents: 3, world: 'sphere', worldScale: 2, desc: 'full stage on the x2 globe (app default world)' },
+    swarm_sphere:      { stage: 3, agents: 6, world: 'sphere', worldScale: 2, enemies: 4, bosses: 2, desc: '6 agents vs 4 enemies + 2 bosses on the x2 globe' },
+    swarm_sphere_full: { stage: 3, agents: 6, world: 'sphere', worldScale: 2, enemies: 4, bosses: 2, fuelRescue: true, waves: true, bossPhases: true, desc: '43-dim fuel rescue + waves + boss phases on the x2 globe' }
 };
 
 const SUITES = {
-    quick:    { scenarios: ['s0_torus', 's3_sphere'],                                  episodes: 6,  maxSteps: 500 },
-    standard: { scenarios: ['s0_torus', 's3_torus', 's3_sphere'],                      episodes: 20, maxSteps: 1000 },
-    full:     { scenarios: ['s0_torus', 's3_torus', 's3_sphere', 'swarm_sphere'],      episodes: 40, maxSteps: 1000 }
+    quick:    { scenarios: ['s0_torus', 's3_sphere'],                                                       episodes: 6,  maxSteps: 500 },
+    standard: { scenarios: ['s0_torus', 's3_torus', 's3_sphere'],                                           episodes: 20, maxSteps: 1000 },
+    full:     { scenarios: ['s0_torus', 's3_torus', 's3_sphere', 'swarm_sphere'],                           episodes: 40, maxSteps: 1000 },
+    extended: { scenarios: ['s0_torus', 's3_torus', 's3_sphere', 'swarm_sphere', 'swarm_sphere_full'],      episodes: 20, maxSteps: 1000 }
 };
 
 function parseArgs(argv) {
@@ -110,7 +112,8 @@ for (const id of scenarioIds) {
     const env = new AsteroidsEnv({
         numAgents: sc.agents, maxSteps, curriculumStage: sc.stage,
         world: sc.world, worldScale: sc.worldScale,
-        enemies: sc.enemies, bosses: sc.bosses
+        enemies: sc.enemies, bosses: sc.bosses,
+        fuelRescue: !!sc.fuelRescue, waves: !!sc.waves, bossPhases: !!sc.bossPhases
     });
 
     const results = {};

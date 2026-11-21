@@ -27,6 +27,12 @@
     let lines = null, linePos = null, lineCol = null, lineCount = 0;
     let points = null, pointPos = null, pointCol = null, pointCount = 0;
     let gridGroup = null, stars = null, globe = null, halo = null;
+    let heatmapMesh = null, heatmapColors = null, heatmapCols = 24, heatmapRows = 16;
+    // Interactive camera state (mouse drag-orbit, wheel zoom, click-to-inspect).
+    let prevFollowMode = 'alpha';
+    let inspectedEntity = null;
+    let pointerAttached = false;
+    let dragging = false, dragMoved = false, dragStartX = 0, dragStartY = 0, lastPointerX = 0, lastPointerY = 0;
     // Soft additive halos (stand-in for bloom) and translucent shield domes.
     const MAX_GLOWS = 1024;
     let glows = null, glowPos = null, glowCol = null, glowSize = null, glowCount = 0;
@@ -124,9 +130,9 @@
         overlayCtx = overlayCanvas.getContext('2d');
 
         try {
-            // preserveDrawingBuffer lets the page (and users) read the frame back
-            // with toDataURL for screenshots; the cost is one buffer copy per frame.
-            renderer = new THREE.WebGLRenderer({ canvas: glCanvas, antialias: true, alpha: false, powerPreference: 'high-performance', preserveDrawingBuffer: true });
+            // Avoid unconditional preserveDrawingBuffer (extra per-frame GPU copy);
+            // snapshot() invokes renderer.render(scene, camera) on demand before capture.
+            renderer = new THREE.WebGLRenderer({ canvas: glCanvas, antialias: true, alpha: false, powerPreference: 'high-performance', preserveDrawingBuffer: false });
         } catch (e) {
             console.error('[Sphere] WebGL unavailable', e);
             return false;
@@ -145,10 +151,12 @@
         camera.add(keyLight);
 
         buildGlobe();
+        buildHeatmapMesh();
         buildGrid();
         buildStars();
         buildDynamicBuffers();
         placeCanvases();
+        attachPointerControls();
         ready = true;
         console.log('[Sphere] view ready R=' + R.toFixed(1) + ' (' + W + 'x' + H + ')');
         return true;
@@ -171,6 +179,213 @@
         });
         halo = new THREE.Mesh(haloGeo, haloMat);
         scene.add(halo);
+    }
+
+    // 3D Critic Value Heatmap shell: maps the 24x16 grid evaluated in
+    // policy_viz.js onto the globe surface (magenta = low V(s) danger,
+    // cyan = high V(s) safe). Hidden whenever heatmap data is unavailable.
+    function buildHeatmapMesh() {
+        const THREE = root.THREE;
+        const WORLD = root.WORLD;
+        if (heatmapMesh) {
+            scene.remove(heatmapMesh);
+            if (heatmapMesh.geometry) heatmapMesh.geometry.dispose();
+            if (heatmapMesh.material) heatmapMesh.material.dispose();
+            heatmapMesh = null;
+        }
+        const cols = heatmapCols, rows = heatmapRows;
+        const ws = WORLD.size();
+        const vertCount = (cols + 1) * (rows + 1);
+        const pos = new Float32Array(vertCount * 3);
+        heatmapColors = new Float32Array(vertCount * 3);
+        const lift = 0.45;
+        let pIdx = 0;
+        for (let r = 0; r <= rows; r++) {
+            const y = (r / rows) * ws.h;
+            for (let c = 0; c <= cols; c++) {
+                const x = (c / cols) * ws.w;
+                const p = WORLD.toWorld3(x, y, 0, 0, lift);
+                pos[pIdx++] = p[0];
+                pos[pIdx++] = p[1];
+                pos[pIdx++] = p[2];
+            }
+        }
+        const indices = [];
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                const a = r * (cols + 1) + c;
+                const b = a + 1;
+                const d = (r + 1) * (cols + 1) + c;
+                const e = d + 1;
+                indices.push(a, d, b, b, d, e);
+            }
+        }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        geo.setAttribute('color', new THREE.BufferAttribute(heatmapColors, 3).setUsage(THREE.DynamicDrawUsage));
+        geo.setIndex(indices);
+        const mat = new THREE.MeshBasicMaterial({
+            vertexColors: true,
+            transparent: true,
+            opacity: 0.24,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            side: THREE.FrontSide
+        });
+        heatmapMesh = new THREE.Mesh(geo, mat);
+        heatmapMesh.visible = false;
+        scene.add(heatmapMesh);
+    }
+
+    function syncHeatmapMesh() {
+        if (!heatmapMesh || !heatmapColors) return;
+        const data = (typeof root.getValueHeatmapData === 'function') ? root.getValueHeatmapData() : null;
+        if (!data || !data.active || !data.values) {
+            heatmapMesh.visible = false;
+            return;
+        }
+        const cols = data.cols || heatmapCols;
+        const rows = data.rows || heatmapRows;
+        const span = Math.max(1e-3, data.vMax - data.vMin);
+        let idx = 0;
+        for (let r = 0; r <= rows; r++) {
+            const gr = Math.min(rows - 1, r);
+            for (let c = 0; c <= cols; c++) {
+                const gc = c % cols;
+                const val = data.values[gr * cols + gc];
+                const t = Math.max(0, Math.min(1, (val - data.vMin) / span));
+                // Danger (t=0) -> bright magenta; Safe (t=1) -> soft cyan
+                const weight = 0.45 + 0.55 * (1 - t);
+                heatmapColors[idx++] = (1 - t) * weight;
+                heatmapColors[idx++] = 0.82 * t * weight;
+                heatmapColors[idx++] = 1.0 * weight;
+            }
+        }
+        heatmapMesh.geometry.attributes.color.needsUpdate = true;
+        heatmapMesh.visible = true;
+    }
+
+    // Rotate camera basis vectors by screen drag deltas (no gimbal lock).
+    function rotateCameraByDrag(dx, dy) {
+        const right = normalize([
+            camUp[1] * camDir[2] - camUp[2] * camDir[1],
+            camUp[2] * camDir[0] - camUp[0] * camDir[2],
+            camUp[0] * camDir[1] - camUp[1] * camDir[0]
+        ]);
+        const yaw = -dx * 0.006;
+        const pitch = dy * 0.006;
+        // Apply yaw around camUp
+        const cy = Math.cos(yaw), sy = Math.sin(yaw);
+        camDir = normalize([
+            camDir[0] * cy + right[0] * sy,
+            camDir[1] * cy + right[1] * sy,
+            camDir[2] * cy + right[2] * sy
+        ]);
+        // Recompute right after yaw, then apply pitch around right
+        const right2 = normalize([
+            camUp[1] * camDir[2] - camUp[2] * camDir[1],
+            camUp[2] * camDir[0] - camUp[0] * camDir[2],
+            camUp[0] * camDir[1] - camUp[1] * camDir[0]
+        ]);
+        const cp = Math.cos(pitch), sp = Math.sin(pitch);
+        const newDir = normalize([
+            camDir[0] * cp + camUp[0] * sp,
+            camDir[1] * cp + camUp[1] * sp,
+            camDir[2] * cp + camUp[2] * sp
+        ]);
+        const newUp = normalize([
+            camUp[0] * cp - camDir[0] * sp,
+            camUp[1] * cp - camDir[1] * sp,
+            camUp[2] * cp - camDir[2] * sp
+        ]);
+        camDir = newDir;
+        camUp = normalize([
+            newUp[0] - right2[0] * (newUp[0] * right2[0] + newUp[1] * right2[1] + newUp[2] * right2[2]),
+            newUp[1] - right2[1] * (newUp[0] * right2[0] + newUp[1] * right2[1] + newUp[2] * right2[2]),
+            newUp[2] - right2[2] * (newUp[0] * right2[0] + newUp[1] * right2[1] + newUp[2] * right2[2])
+        ]);
+    }
+
+    function pickEntityAt(px, py) {
+        if (!lastState) return null;
+        let best = null;
+        let bestDist = 28;
+        const candidates = [];
+        (lastState.aiShips || []).forEach(s => { if (s) candidates.push({ kind: 'ai', entity: s }); });
+        (lastState.enemyShips || []).forEach(e => { if (e) candidates.push({ kind: 'enemy', entity: e }); });
+        for (const item of candidates) {
+            const sp = project(item.entity.x, item.entity.y);
+            if (!sp) continue;
+            const d = Math.hypot(sp.x - px, sp.y - py);
+            if (d < bestDist) { bestDist = d; best = item; }
+        }
+        return best;
+    }
+
+    function attachPointerControls() {
+        if (pointerAttached || !host || typeof host.addEventListener !== 'function') return;
+        pointerAttached = true;
+
+        host.addEventListener('mousedown', (e) => {
+            if (!ready || !root.WORLD || !root.WORLD.isSphere()) return;
+            if (e.button !== 0) return;
+            dragging = true;
+            dragMoved = false;
+            dragStartX = lastPointerX = e.clientX;
+            dragStartY = lastPointerY = e.clientY;
+        });
+
+        const onMove = (e) => {
+            if (!dragging || !ready || !root.WORLD || !root.WORLD.isSphere()) return;
+            const dx = e.clientX - lastPointerX;
+            const dy = e.clientY - lastPointerY;
+            lastPointerX = e.clientX;
+            lastPointerY = e.clientY;
+            if (!dragMoved && Math.hypot(e.clientX - dragStartX, e.clientY - dragStartY) > 4) {
+                dragMoved = true;
+                if (followMode !== 'manual' && followMode !== 'inspect') prevFollowMode = followMode;
+                followMode = 'manual';
+                inspectedEntity = null;
+            }
+            if (dragMoved) rotateCameraByDrag(dx, dy);
+        };
+
+        const onUp = (e) => {
+            if (!dragging) return;
+            dragging = false;
+            if (!dragMoved && ready && root.WORLD && root.WORLD.isSphere()) {
+                const rect = host.getBoundingClientRect();
+                const sx = (e.clientX - rect.left) * (W / Math.max(1, rect.width));
+                const sy = (e.clientY - rect.top) * (H / Math.max(1, rect.height));
+                const picked = pickEntityAt(sx, sy);
+                if (picked) {
+                    if (followMode !== 'manual' && followMode !== 'inspect') prevFollowMode = followMode;
+                    inspectedEntity = picked;
+                    followMode = 'inspect';
+                } else if (followMode === 'inspect') {
+                    inspectedEntity = null;
+                    followMode = prevFollowMode || 'alpha';
+                }
+            }
+        };
+
+        if (typeof root.addEventListener === 'function') {
+            root.addEventListener('mousemove', onMove);
+            root.addEventListener('mouseup', onUp);
+        }
+
+        host.addEventListener('wheel', (e) => {
+            if (!ready || !root.WORLD || !root.WORLD.isSphere()) return;
+            e.preventDefault();
+            const step = e.deltaY > 0 ? 0.22 : -0.22;
+            zoomReq = Math.max(1.3, Math.min(4.5, zoomReq + step));
+        }, { passive: false });
+
+        host.addEventListener('dblclick', () => {
+            if (!ready || !root.WORLD || !root.WORLD.isSphere()) return;
+            inspectedEntity = null;
+            followMode = prevFollowMode || 'alpha';
+        });
     }
 
     function buildGrid() {
@@ -337,7 +552,7 @@
         if (r === R) return;
         R = r;
         scene.remove(globe); scene.remove(halo); scene.remove(gridGroup); scene.remove(stars);
-        buildGlobe(); buildGrid(); buildStars();
+        buildGlobe(); buildHeatmapMesh(); buildGrid(); buildStars();
         camera.far = R * 80;
         camera.updateProjectionMatrix();
         keyLight.position.set(R * 1.6, R * 1.4, R * 0.8);
@@ -823,6 +1038,18 @@
             const kf = WORLD.frameAt(killCam.x, killCam.y);
             return { dir: kf.p, up: kf.n };
         }
+        if (followMode === 'manual') {
+            return { dir: camDir, up: camUp };
+        }
+        if (followMode === 'inspect' && inspectedEntity && inspectedEntity.entity) {
+            const list = inspectedEntity.kind === 'enemy' ? (state.enemyShips || []) : (state.aiShips || []);
+            if (list.includes(inspectedEntity.entity)) {
+                const fr = WORLD.frameAt(inspectedEntity.entity.x, inspectedEntity.entity.y);
+                return { dir: fr.p, up: fr.n };
+            }
+            inspectedEntity = null;
+            followMode = prevFollowMode || 'alpha';
+        }
         if (followMode === 'orbit') {
             orbitAngle += 0.0025;
             const tilt = 0.42;
@@ -871,7 +1098,7 @@
 
     function updateCamera(state) {
         const tgt = followTarget(state);
-        const k = followMode === 'orbit' ? 1 : 0.08;
+        const k = (followMode === 'orbit' || followMode === 'manual') ? 1 : 0.08;
         camDir = normalize(lerp3(camDir, tgt.dir, k));
         let up = lerp3(camUp, tgt.up, k);
         const d = up[0] * camDir[0] + up[1] * camDir[1] + up[2] * camDir[2];
@@ -970,6 +1197,29 @@
             drawShip(s, css, false);
         });
 
+        // Entity-Attention sightlines (when an EntityAttentionNet policy is active):
+        // draw translucent geodesic arcs from each ship to its highest-attended entity.
+        const runner = (typeof root.getPolicyRunner === 'function') ? root.getPolicyRunner() : null;
+        if (runner && runner.enabled && runner.lastDecisions) {
+            const attnCss = rgb(THEME.accent || '#FF00FF');
+            (state.aiShips || []).forEach(s => {
+                if (!s || !isFront(s)) return;
+                const d = runner.lastDecisions[s.agentId];
+                if (!d || !d.attentionWeights || !d.attendedEntities) return;
+                let bestIdx = -1, bestW = 0.25;
+                for (let k = 0; k < d.attentionWeights.length; k++) {
+                    if (d.attendedEntities[k] && d.attentionWeights[k] > bestW) {
+                        bestW = d.attentionWeights[k];
+                        bestIdx = k;
+                    }
+                }
+                if (bestIdx >= 0) {
+                    const target = d.attendedEntities[bestIdx];
+                    arc(s.x, s.y, target.x, target.y, 3.0, dim(attnCss, Math.min(1, bestW * 1.4)), 10, true);
+                }
+            });
+        }
+
         if (state.ship) {
             // Inactive player ship is drawn dimmed, like the 2D path's 0.3 alpha.
             const css = state.playerShipActive ? (THEME.primary || '#00D2FF') : '#2a4a5a';
@@ -1008,6 +1258,7 @@
         gg.attributes.glowSize.needsUpdate = true;
         gg.setDrawRange(0, glowCount);
 
+        syncHeatmapMesh();
         renderer.render(scene, camera);
     }
 
@@ -1099,11 +1350,85 @@
         ctx.font = '10px monospace';
         ctx.fillStyle = 'rgba(209,209,209,0.85)';
         ctx.textAlign = 'right';
-        const modeLabel = followMode === 'orbit' ? 'orbit' : followMode === 'fleet' ? 'follow fleet' : followMode === 'boss' ? 'follow boss' : 'follow alpha';
+        const modeLabel = followMode === 'manual' ? 'free orbit (dbl-click reset)'
+            : followMode === 'inspect' ? 'inspect lock'
+            : followMode === 'orbit' ? 'orbit'
+            : followMode === 'fleet' ? 'follow fleet'
+            : followMode === 'boss' ? 'follow boss' : 'follow alpha';
         const sc = WORLD.getScale();
         const scaleLabel = sc !== 1 ? `  x${sc}` : '';
         ctx.fillText(`SPHERE R=${R.toFixed(0)}${scaleLabel}  cam: ${modeLabel} ${zoom.toFixed(1)}R  far side: ${hiddenCount}`, mx + mw, my + mh + 12);
-        ctx.fillText('Designed by Dang.', mx + mw, my + mh + 24);
+        ctx.fillText('Drag: orbit · Scroll: zoom · Click ship: inspect · Dbl-click: reset', mx + mw, my + mh + 24);
+
+        // Draw 3D heatmap legend + Agent Inspector Card when active.
+        const hm = (typeof root.getValueHeatmapData === 'function') ? root.getValueHeatmapData() : null;
+        if (hm && hm.active) {
+            ctx.textAlign = 'left';
+            ctx.fillStyle = THEME.overlayMuted || 'rgba(209,209,209,0.85)';
+            ctx.fillText(
+                `3D critic V(s) [${hm.focusLabel}]  ${hm.vMin.toFixed(1)} .. ${hm.vMax.toFixed(1)}  (magenta=danger  cyan=safe)`,
+                10, 14
+            );
+        }
+        if (inspectedEntity && inspectedEntity.entity) {
+            drawInspectorCard(ctx, inspectedEntity);
+        }
+        ctx.restore();
+    }
+
+    function drawInspectorCard(ctx, item) {
+        const e = item.entity;
+        const lines = [];
+        if (item.kind === 'enemy') {
+            lines.push(`INSPECT: ${(e.type || 'enemy').toUpperCase()}  HP ${Math.ceil(e.health || 0)}/${e.maxHealth || '?'}`);
+            if (e.phase !== undefined) lines.push(`phase: ${e.phase}${e.enraged ? ' [ENRAGED]' : ''}`);
+            if (e.subsystems && e.subsystems.length) {
+                const alive = e.subsystems.filter(s => !s.destroyed).length;
+                lines.push(`subsystems: ${alive}/${e.subsystems.length} online`);
+            }
+        } else {
+            const tag = e.isAlpha ? 'ALPHA' : (e.role === 'fuel' ? 'TANKER' : `AGENT #${e.agentId !== undefined ? e.agentId : '?'}`);
+            lines.push(`INSPECT: ${tag} (${e.role || 'combat'})`);
+            const spd = Math.hypot(e.velocityX || 0, e.velocityY || 0).toFixed(1);
+            const fuelPct = e.maxFuel ? `${Math.round(100 * (e.fuel || 0) / e.maxFuel)}%` : 'n/a';
+            lines.push(`HP ${e.health}/${e.maxHealth || 3} · Fuel ${fuelPct} · Spd ${spd}`);
+            const runner = (typeof root.getPolicyRunner === 'function') ? root.getPolicyRunner() : null;
+            const dec = runner && runner.enabled && runner.lastDecisions ? runner.lastDecisions[e.agentId] : null;
+            if (dec) {
+                const vStr = (dec.value !== null && dec.value !== undefined) ? dec.value.toFixed(2) : '-';
+                lines.push(`V(s) ${vStr} · H ${dec.entropy.toFixed(2)} · ${typeof root.describePolicyDecision === 'function' ? root.describePolicyDecision(dec) : ''}`);
+                if (dec.topActions && dec.topActions.length && typeof decodeAction === 'function') {
+                    const topStr = dec.topActions.map(t => `#${t.action}:${Math.round(t.p * 100)}%`).join('  ');
+                    lines.push(`top-3: ${topStr}`);
+                }
+            } else {
+                lines.push('controller: rule-based / scripted');
+            }
+        }
+        const x = 10, y = 26, w = 278, h = 14 + lines.length * 14;
+        ctx.save();
+        ctx.fillStyle = 'rgba(5, 10, 24, 0.82)';
+        ctx.fillRect(x, y, w, h);
+        ctx.strokeStyle = THEME.primary || '#00D2FF';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'left';
+        lines.forEach((line, idx) => {
+            ctx.fillStyle = idx === 0 ? (THEME.primary || '#00D2FF') : (THEME.muted || '#D1D1D1');
+            ctx.fillText(line, x + 8, y + 14 + idx * 14);
+        });
+        // Highlight ring around the inspected ship
+        const sp = project(e.x, e.y);
+        if (sp) {
+            ctx.strokeStyle = '#FFD700';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([4, 3]);
+            ctx.beginPath();
+            ctx.arc(sp.x, sp.y, ((e.size || 15) + 18) * (sp.scale || 1), 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
         ctx.restore();
     }
 
@@ -1115,7 +1440,13 @@
         project: project,
         overlayContext: () => overlayCtx,
         setVisible: setVisible,
-        setCamera: (mode) => { followMode = (mode === 'orbit' || mode === 'fleet' || mode === 'boss') ? mode : 'alpha'; },
+        setCamera: (mode) => {
+            const valid = (mode === 'orbit' || mode === 'fleet' || mode === 'boss') ? mode : 'alpha';
+            prevFollowMode = valid;
+            if (followMode !== 'manual' && followMode !== 'inspect') followMode = valid;
+            else followMode = valid;
+            inspectedEntity = null;
+        },
         killCam: (x, y, frames) => {
             if (!killCamEnabled || killCamCooldown > 0 || (killCam && killCam.frames > 0)) return;
             killCam = { x, y, frames: frames || 90 };
@@ -1123,6 +1454,9 @@
         },
         setKillCamEnabled: (on) => { killCamEnabled = !!on; if (!on) killCam = null; },
         getCamera: () => followMode,
+        getInspectedEntity: () => inspectedEntity ? inspectedEntity.entity : null,
+        clearInspection: () => { inspectedEntity = null; if (followMode === 'inspect') followMode = prevFollowMode || 'alpha'; },
+        isHeatmapVisible: () => !!(heatmapMesh && heatmapMesh.visible),
         setZoom: (z) => { const v = Number(z); if (isFinite(v)) zoomReq = Math.max(1.3, Math.min(4.5, v)); },
         getZoom: () => zoom,
         getRequestedZoom: () => zoomReq,
@@ -1130,6 +1464,7 @@
         // Composite the WebGL frame and the 2D overlay into one PNG data URL.
         snapshot: () => {
             if (!ready) return null;
+            if (renderer && scene && camera) renderer.render(scene, camera);
             const c = document.createElement('canvas');
             c.width = W; c.height = H;
             const g = c.getContext('2d');

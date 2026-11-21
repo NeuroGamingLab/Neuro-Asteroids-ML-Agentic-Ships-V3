@@ -31,12 +31,29 @@ JSC = (
 )
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+
+def resolve_js_command(script_rel_path):
+    """Return the command prefix to run a JS pipeline script via jsc or node."""
+    pref = os.environ.get("JS_RUNTIME", "auto").lower()
+    if pref != "node" and os.path.exists(JSC):
+        return [JSC, script_rel_path, "--"]
+    node = shutil.which("node")
+    if node:
+        return [node, "-r", "./sim/runtime_shim.js", script_rel_path, "--"]
+    sys.exit(
+        f"Neither JavaScriptCore ({JSC}) nor Node.js was found on PATH.\n"
+        "Install Node.js (Linux/Windows) or run on macOS."
+    )
+
 # Arguments forwarded verbatim to train.js.
 PASSTHROUGH = [
     "stage", "agents", "iterations", "rollout", "maxSteps", "seed", "lr",
-    "criticLr", "entropy", "epochs", "minibatch", "hidden", "evalEvery",
+    "lrEnd", "criticLr", "entropy", "entropyEnd", "valueClip", "returnNorm",
+    "orthogonalInit", "actionMode", "centralizedCritic", "entityTokens",
+    "creditMode", "epochs", "minibatch", "hidden", "evalEvery",
     "evalEpisodes", "bc", "bcSteps", "bcEpochs", "bcLr", "bcAlpha",
-    "aimShaping", "init", "fuelRescue", "world", "worldScale", "enemies", "bosses",
+    "aimShaping", "init", "fuelRescue", "waves", "bossPhases",
+    "world", "worldScale", "enemies", "bosses",
 ]
 
 
@@ -72,6 +89,28 @@ def build_parser():
                         help="policy JSON to warm start from (for curriculum transfer)")
     parser.add_argument("--fuelRescue", type=int, default=0,
                         help="1 to train with the alpha fuel-rescue mechanic (43-dim observation)")
+    parser.add_argument("--waves", type=int, default=0,
+                        help="1 to enable escalating enemy waves")
+    parser.add_argument("--bossPhases", type=int, default=0,
+                        help="1 to enable boss phase escorts and Phase 3 enrage")
+    parser.add_argument("--actionMode", choices=["flat", "factored"], default="flat",
+                        help="flat 48-way categorical or factored 11-logit multi-discrete head")
+    parser.add_argument("--lrEnd", type=float, default=None,
+                        help="final learning rate for linear annealing (omit for constant lr)")
+    parser.add_argument("--entropyEnd", type=float, default=None,
+                        help="final entropy coefficient for linear annealing")
+    parser.add_argument("--valueClip", type=float, default=0.0,
+                        help="PPO value-function clip epsilon (0 disables)")
+    parser.add_argument("--returnNorm", type=int, default=0,
+                        help="1 to enable running return/target normalization")
+    parser.add_argument("--orthogonalInit", type=int, default=0,
+                        help="1 to use orthogonal weight initialization")
+    parser.add_argument("--centralizedCritic", type=int, default=0,
+                        help="1 to train a MAPPO centralized critic (local obs + global team state)")
+    parser.add_argument("--entityTokens", type=int, default=0,
+                        help="1 to append multi-entity tokens and use an attention/DeepSets encoder")
+    parser.add_argument("--creditMode", choices=["ippo", "vdn", "coma"], default="ippo",
+                        help="multi-agent credit assignment mode")
     parser.add_argument("--world", choices=["torus", "sphere"], default="torus",
                         help="world geometry: flat wrap-around torus (default) or sphere")
     parser.add_argument("--worldScale", type=float, default=1.0,
@@ -89,18 +128,12 @@ def build_parser():
 def main():
     args = build_parser().parse_args()
 
-    if not os.path.exists(JSC):
-        sys.exit(
-            f"JavaScriptCore not found at {JSC}.\n"
-            "This pipeline uses the JavaScriptCore that ships with macOS."
-        )
-
     run_name = args.run_name or f"stage{args.stage}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     run_dir = os.path.join(args.out_dir, run_name)
     os.makedirs(run_dir, exist_ok=True)
     os.makedirs(args.model_dir, exist_ok=True)
 
-    cmd = [JSC, "training/train.js", "--"]
+    cmd = resolve_js_command("training/train.js")
     values = vars(args)
     for key in PASSTHROUGH:
         value = values.get(key)
@@ -193,14 +226,31 @@ def main():
     # Sphere runs publish under their own name so they never replace the torus
     # policies the browser loads by default; the world (and its scale) is part
     # of the task, so the checkpoints are not interchangeable.
+    suffix_parts = []
+    if args.fuelRescue:
+        suffix_parts.append("fuel")
+    if args.waves:
+        suffix_parts.append("waves")
+    if args.actionMode == "factored":
+        suffix_parts.append("factored")
+    if args.centralizedCritic:
+        suffix_parts.append("mappo")
+    if args.entityTokens:
+        suffix_parts.append("attn")
+    extra_suffix = ("_" + "_".join(suffix_parts)) if suffix_parts else ""
     if args.world == "sphere":
         scale_tag = f"{args.worldScale:g}".replace(".", "p")
-        published = os.path.join(args.model_dir, f"policy_stage{args.stage}_sphere_x{scale_tag}.json")
+        published = os.path.join(args.model_dir, f"policy_stage{args.stage}_sphere_x{scale_tag}{extra_suffix}.json")
     else:
-        published = os.path.join(args.model_dir, f"policy_stage{args.stage}.json")
+        published = os.path.join(args.model_dir, f"policy_stage{args.stage}{extra_suffix}.json")
     if meta.get("beatsHeuristic"):
         shutil.copyfile(run_model_path, published)
         print(f"Published to {published} (beat the rule-based controller it replaces)")
+        try:
+            from update_registry import write_registry
+            write_registry(args.model_dir)
+        except Exception:
+            pass
     else:
         print("NOT published: this run did not significantly beat the rule-based controller.")
 

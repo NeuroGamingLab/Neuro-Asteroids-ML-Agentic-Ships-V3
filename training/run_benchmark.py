@@ -21,6 +21,7 @@ import argparse
 import glob
 import json
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -32,8 +33,18 @@ BASELINE_DIR = os.path.join(REPO_ROOT, "training", "benchmarks")
 REFERENCE_POLICIES = ("heuristic", "random")
 
 
+def resolve_js_command(script_rel_path):
+    pref = os.environ.get("JS_RUNTIME", "auto").lower()
+    if pref != "node" and os.path.exists(JSC):
+        return [JSC, script_rel_path, "--"]
+    node = shutil.which("node")
+    if node:
+        return [node, "-r", "./sim/runtime_shim.js", script_rel_path, "--"]
+    raise SystemExit("Neither JavaScriptCore nor Node.js was found.")
+
+
 def run_suite(suite, models, scenarios, episodes):
-    cmd = [JSC, "training/benchmark.js", "--", "--suite", suite]
+    cmd = resolve_js_command("training/benchmark.js") + ["--suite", suite]
     if models:
         cmd += ["--models", ",".join(models)]
     if scenarios:
@@ -114,7 +125,7 @@ def check_against_baseline(report, baseline, tolerance):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--suite", default="standard", choices=["quick", "standard", "full"])
+    ap.add_argument("--suite", default="standard", choices=["quick", "standard", "full", "extended"])
     ap.add_argument("--models", nargs="*", default=None,
                     help="checkpoints to evaluate (default: every models/policy_stage*.json)")
     ap.add_argument("--no-models", action="store_true", help="evaluate only the reference policies")

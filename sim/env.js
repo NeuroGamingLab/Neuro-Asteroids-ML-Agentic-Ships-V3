@@ -101,11 +101,20 @@
             this.bossesOverride = Number.isFinite(options.bosses) ? options.bosses : null;
             this.reward = Object.assign({}, DEFAULT_REWARD, options.reward || {});
             // With fuel rescue on, one of the ships becomes the scripted tanker and
-            // the observation gains the five fuel features.
+            // the observation gains the five fuel features. With entityTokens on,
+            // 10x6 permutation-invariant entity slots are appended (103 dims total).
             this.fuelRescue = !!options.fuelRescue;
-            this.featureOptions = this.fuelRescue ? { fuelFeatures: true } : {};
-            this.obsDim = this.fuelRescue ? RL_FEATURE_DIM_FUEL : RL_FEATURE_DIM;
-            this.featureNames = this.fuelRescue ? RL_FEATURE_NAMES_FUEL : RL_FEATURE_NAMES;
+            this.entityTokens = !!options.entityTokens;
+            this.featureOptions = this.entityTokens
+                ? { fuelFeatures: true, entityTokens: true }
+                : (this.fuelRescue ? { fuelFeatures: true } : {});
+            this.obsDim = this.entityTokens
+                ? RL_FEATURE_DIM_ENTITY
+                : (this.fuelRescue ? RL_FEATURE_DIM_FUEL : RL_FEATURE_DIM);
+            this.featureNames = this.entityTokens
+                ? RL_FEATURE_NAMES_ENTITY
+                : (this.fuelRescue ? RL_FEATURE_NAMES_FUEL : RL_FEATURE_NAMES);
+            this.globalStateDim = (typeof GLOBAL_STATE_DIM !== 'undefined') ? GLOBAL_STATE_DIM : 12;
             this.actionSize = ACTION_SPACE_SIZE;
             this.fuelStats = { refuels: 0, dockDeaths: 0, lowFuelFrames: 0 };
             this.killStats = { asteroids: 0, enemies: 0, bosses: 0 };
@@ -238,6 +247,16 @@
             return out;
         }
 
+        // Global team-state vector for MAPPO Centralized Critic training.
+        globalState() {
+            if (typeof MLFeatureExtractor !== 'undefined' && typeof MLFeatureExtractor.extractGlobalState === 'function') {
+                return MLFeatureExtractor.extractGlobalState(
+                    aiShips, asteroids, enemyShips, enemyBullets, { numAgents: this.numAgents }
+                );
+            }
+            return new Array(this.globalStateDim).fill(0);
+        }
+
         // Shaping potential: how well the agent is currently aimed at whatever it
         // should be shooting at for this curriculum stage.
         potential(agentId) {
@@ -343,14 +362,15 @@
                     if (lost > 0) r += lost * R.damageTaken;
                     this.prevHealth[i] = shipRef.health;
 
-                    // Bounded shaping.
+                    // Bounded shaping (uses geodesic distance on the 3D sphere).
+                    const distFn = (typeof WORLD !== 'undefined' && WORLD && WORLD.isSphere())
+                        ? (x1, y1, x2, y2) => WORLD.distance(x1, y1, x2, y2)
+                        : (x1, y1, x2, y2) => Math.hypot(x2 - x1, y2 - y1);
                     let nearbyAllies = 0;
                     for (let j = 0; j < aiShips.length; j++) {
                         const other = aiShips[j];
                         if (!other || other === shipRef) continue;
-                        const dx = other.x - shipRef.x;
-                        const dy = other.y - shipRef.y;
-                        if (Math.sqrt(dx * dx + dy * dy) < 100) nearbyAllies++;
+                        if (distFn(shipRef.x, shipRef.y, other.x, other.y) < 100) nearbyAllies++;
                     }
                     r += R.allyProximity * Math.min(nearbyAllies, R.maxAllyProximity);
 
@@ -367,9 +387,7 @@
                     if (shipRef.isAlpha && threatsPresent && speed < R.idleSpeedThreshold) {
                         const cx = worldW() / 2;
                         const cy = worldH() / 2;
-                        const dCx = shipRef.x - cx;
-                        const dCy = shipRef.y - cy;
-                        if (Math.sqrt(dCx * dCx + dCy * dCy) < R.centerCampRadius) {
+                        if (distFn(shipRef.x, shipRef.y, cx, cy) < R.centerCampRadius) {
                             r += R.centerCampingPenalty;
                         }
                     }

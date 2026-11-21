@@ -1,0 +1,13 @@
+# Caddy automatic HTTPS reverse proxy for Streamlit (includes WebSocket upgrade
+# support for /_stcore/stream). Set ASTEROIDS_DOMAIN in your environment.
+{$ASTEROIDS_DOMAIN:localhost} {
+    encode gzip zstd
+    reverse_proxy asteroids-ai:8501 {
+        flush_interval -1
+    }
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+}

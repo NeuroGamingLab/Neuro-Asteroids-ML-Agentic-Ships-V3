@@ -32,12 +32,16 @@ RUN_BENCHMARK = os.path.join(REPO_ROOT, "training", "run_benchmark.py")
 
 # 'swarm' is stage 3 with a fleet-sized opposition, matching the app defaults far
 # better than the 2 enemies + 1 boss of the standard stage 3.
+# 'swarm_full' adds fuel rescue (43-dim), escalating waves, and boss phase mechanics.
 SWARM = {"stage": 3, "agents": 6, "enemies": 4, "bosses": 2}
+SWARM_FULL = {"stage": 3, "agents": 6, "enemies": 4, "bosses": 2, "fuelRescue": 1, "waves": 1, "bossPhases": 1}
 
 
 def stage_args(stage):
     if stage == "swarm":
         return SWARM
+    if stage == "swarm_full":
+        return SWARM_FULL
     return {"stage": int(stage)}
 
 
@@ -93,7 +97,7 @@ def main():
     ap.add_argument("--init", default="none", help="optional warm start for stage 0")
     ap.add_argument("--parallel", type=int, default=max(1, (os.cpu_count() or 2) - 2))
     ap.add_argument("--out-dir", default=os.path.join(REPO_ROOT, "training_runs"))
-    ap.add_argument("--bench-suite", default="standard", choices=["quick", "standard", "full"])
+    ap.add_argument("--bench-suite", default="standard", choices=["quick", "standard", "full", "extended"])
     args = ap.parse_args()
 
     started = time.time()

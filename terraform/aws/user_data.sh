@@ -37,9 +37,9 @@ alternatives --set python3 /usr/bin/python3.11 || true
 echo "[3/6] Upgrading pip..."
 python3 -m pip install --upgrade pip setuptools wheel
 
-# Install Streamlit (only dependency needed for the game)
+# Install Streamlit (pinned to match requirements.txt)
 echo "[4/6] Installing Streamlit..."
-python3 -m pip install streamlit>=1.28.0
+python3 -m pip install "streamlit==1.40.2"
 
 # Create application directory
 echo "[5/6] Setting up application directory..."
@@ -141,9 +141,12 @@ alias game-logs='sudo journalctl -u asteroids-game -f'
 alias game-app='cd $APP_DIR/app'
 ALIAS_EOF
 
+# Fetch public IP via IMDSv2 (main.tf enforces http_tokens = "required")
+IMDS_TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 60" || true)
+PUBLIC_IP=$(curl -s -H "X-aws-ec2-metadata-token: ${IMDS_TOKEN}" http://169.254.169.254/latest/meta-data/public-ipv4 || echo "<public-ip>")
+
 # Create info message for login
 cat > /etc/motd << MOTD_EOF
-
                                                                 
        ASTEROIDS ARCADE GAME                                  
                                                                 
@@ -163,9 +166,9 @@ cat > /etc/motd << MOTD_EOF
  Setup Status: cat $APP_DIR/SETUP_STATUS.txt
 
   To deploy your game:
-  1. Upload files to $APP_DIR/app/
+  1. Upload files to $APP_DIR/app/ (or run docker compose up -d using Dockerfile)
   2. Run: game-start
-  3. Access: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4):${streamlit_port}
+  3. Access: http://${PUBLIC_IP}:${streamlit_port}
 
 MOTD_EOF
 

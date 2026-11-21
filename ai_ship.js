@@ -2401,13 +2401,57 @@ class AIShip extends Ship {
         }
     }
 
-    executeFuelDepart(aiShips) {
+    // Compute a small avoidance angle offset for the scripted fuel tanker so it
+    // dodges nearby asteroids and enemy bullets while en route or departing,
+    // without interfering with final docking alignment.
+    computeTankerAvoidanceAngle(desiredAngle, asteroidsList, enemyBulletsList) {
+        const useSphere = typeof WORLD !== 'undefined' && WORLD && WORLD.isSphere();
+        const delta = (tx, ty) => useSphere
+            ? WORLD.delta(this.x, this.y, tx, ty)
+            : { dx: tx - this.x, dy: ty - this.y };
+        let rx = 0, ry = 0;
+        const asts = asteroidsList || (typeof asteroids !== 'undefined' ? asteroids : null);
+        if (asts) {
+            for (let i = 0; i < asts.length; i++) {
+                const a = asts[i];
+                if (!a) continue;
+                const d = delta(a.x, a.y);
+                const dist = Math.hypot(d.dx, d.dy);
+                const safe = (a.radius || 20) + 55;
+                if (dist > 1e-3 && dist < safe) {
+                    const weight = (safe - dist) / safe;
+                    rx -= (d.dx / dist) * weight * 1.8;
+                    ry -= (d.dy / dist) * weight * 1.8;
+                }
+            }
+        }
+        const ebs = enemyBulletsList || (typeof enemyBullets !== 'undefined' ? enemyBullets : null);
+        if (ebs) {
+            for (let i = 0; i < ebs.length; i++) {
+                const b = ebs[i];
+                if (!b) continue;
+                const d = delta(b.x, b.y);
+                const dist = Math.hypot(d.dx, d.dy);
+                if (dist > 1e-3 && dist < 70) {
+                    const weight = (70 - dist) / 70;
+                    rx -= (d.dx / dist) * weight * 1.4;
+                    ry -= (d.dy / dist) * weight * 1.4;
+                }
+            }
+        }
+        if (rx === 0 && ry === 0) return desiredAngle;
+        const vx = Math.cos(desiredAngle) + rx;
+        const vy = Math.sin(desiredAngle) + ry;
+        return Math.atan2(vy, vx);
+    }
+
+    executeFuelDepart(aiShips, asteroidsList, enemyBulletsList) {
         const alpha = aiShips.find(s => s && s.isAlpha);
         if (alpha) {
-            const dx = this.x - alpha.x;
-            const dy = this.y - alpha.y;
-            const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-            this.targetAngle = Math.atan2(dy, dx);
+            const useSphere = typeof WORLD !== 'undefined' && WORLD && WORLD.isSphere();
+            const d = useSphere ? WORLD.delta(alpha.x, alpha.y, this.x, this.y) : { dx: this.x - alpha.x, dy: this.y - alpha.y };
+            const baseAngle = Math.atan2(d.dy, d.dx);
+            this.targetAngle = this.computeTankerAvoidanceAngle(baseAngle, asteroidsList, enemyBulletsList);
             const angleDiff = this.normalizeAngle(this.targetAngle - this.angle);
             this.rotate(angleDiff > 0 ? 1 : -1);
             if (gameRandom() < 0.8) this.thrust(1.6);
@@ -2421,12 +2465,12 @@ class AIShip extends Ship {
     }
 
     // Fuel tanker: never follows the wingman swarm — only HELP response, dock, depart, standby.
-    handleFuelShipBehavior(aiShips) {
+    handleFuelShipBehavior(aiShips, asteroidsList, enemyBulletsList) {
         if (this.fuelTransferActive || this.fuelDocked) {
             return true;
         }
         if (this.fuelDeparting) {
-            this.executeFuelDepart(aiShips);
+            this.executeFuelDepart(aiShips, asteroidsList, enemyBulletsList);
             return true;
         }
 
@@ -2442,7 +2486,11 @@ class AIShip extends Ship {
 
         const alphaNeed = this.findAlphaNeedingFuel(aiShips);
         if (alphaNeed) {
-            this.targetAngle = alphaNeed.angle;
+            // Avoid asteroids/bullets while cruising; drop avoidance inside 90px
+            // so final docking alignment with the Alpha stays crisp.
+            this.targetAngle = (alphaNeed.distance > 90)
+                ? this.computeTankerAvoidanceAngle(alphaNeed.angle, asteroidsList, enemyBulletsList)
+                : alphaNeed.angle;
             const angleDiff = this.normalizeAngle(this.targetAngle - this.angle);
             this.rotate(angleDiff > 0 ? 1 : -1);
             if (gameRandom() < 0.65) this.thrust(1.45);

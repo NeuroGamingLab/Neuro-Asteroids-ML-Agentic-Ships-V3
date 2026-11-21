@@ -478,6 +478,21 @@ print('Sphere world geometry');
     check('local delta is arc-scaled and oriented like the canvas', d.dx > 49 && d.dx < 51 && d.dy < -19 && d.dy > -21,
         `dx=${d.dx.toFixed(2)} dy=${d.dy.toFixed(2)}`);
 
+    // Geodesic features: antimeridian seam & near-pole proximity must stay exact.
+    const seamShip = { x: 10, y: 300, angle: Math.PI, health: 3, maxHealth: 3, velocityX: 0, velocityY: 0 };
+    const seamAst = { x: 1190, y: 300, radius: 20 };
+    const seamFeat = MLFeatureExtractor.extractRL(seamShip, [seamAst], [seamShip], null, [], []);
+    check('MLFeatureExtractor sees asteroid across the antimeridian seam',
+        seamFeat.nearestAsteroidDistance < 0.15 && seamFeat.aimAlignedAsteroid > 0.95,
+        `distNorm=${seamFeat.nearestAsteroidDistance.toFixed(3)} aim=${seamFeat.aimAlignedAsteroid.toFixed(3)}`);
+
+    const poleShip = { x: 0, y: 5, angle: 0, health: 3, maxHealth: 3, velocityX: 0, velocityY: 0 };
+    const poleAst = { x: 600, y: 5, radius: 20 };
+    const poleFeat = MLFeatureExtractor.extractRL(poleShip, [poleAst], [poleShip], null, [], []);
+    check('MLFeatureExtractor sees near-pole asteroid at opposite longitude',
+        poleFeat.nearestAsteroidDistance < 0.1,
+        `distNorm=${poleFeat.nearestAsteroidDistance.toFixed(3)}`);
+
     // Torus mode is byte-identical to the original inline arithmetic.
     WORLD.setMode('torus');
     o = { x: 1195, y: 598, velocityX: 10, velocityY: 5, angle: 0.5 };

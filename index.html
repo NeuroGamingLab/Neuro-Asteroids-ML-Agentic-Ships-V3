@@ -44,7 +44,8 @@
             <p>M: Toggle music</p>
             <p>Waves: clear every hostile to call the next wave; a boss joins every third one</p>
             <p>R / Enter: Restart after game over</p>
-            <p>T: Toggle Flight Telemetry HUD</p>
+            <p>T: Toggle Flight Telemetry HUD · 3D Globe: Drag to orbit, Scroll to zoom, Click ship to inspect, Double-click to reset</p>
+            <p><a href="arena.html" style="color:#00D2FF;">⚔ Split-Screen A/B Policy Arena</a> · <a href="replay.html" style="color:#FF00FF;">📼 Flight Log Replay Scrubber</a></p>
         </div>
         <!-- game.js reads/writes these directly (score, best score); kept
              off-screen rather than removed so updateScore() still has
@@ -89,31 +90,53 @@
         setHudEnabled(true);
         setActionWheels(true);
         // World: sphere by default; ?world=torus for the flat map.
-        // ?cam=alpha|fleet|boss|orbit and ?zoom=1.4..4.5 tune the sphere camera.
-        // ?scale=1..3 sets the globe size relative to the screen (default 2).
+        // ?cam=alpha|fleet|boss|orbit, ?zoom=1.4..4.5, ?scale=1..3,
+        // ?seed=<str> for deterministic arena sync, ?policy=none|<path>, ?waves=0|1.
         (function () {
             const q = new URLSearchParams(location.search);
             const sphere = (q.get('world') || 'sphere') !== 'torus';
             setWorldScale(parseFloat(q.get('scale') || '2'));
             setWorldMode(sphere ? 'sphere' : 'torus');
+            if (q.get('waves') !== null && typeof setWavesEnabled === 'function') {
+                setWavesEnabled(q.get('waves') !== '0' && q.get('waves') !== 'false');
+            }
+            if (q.get('hud') === '0' && typeof setHudEnabled === 'function') setHudEnabled(false);
+            if (q.get('seed') && typeof initGame === 'function') initGame(q.get('seed'));
             if (sphere && typeof SphereView !== 'undefined') {
                 SphereView.setCamera(q.get('cam') || 'alpha');
                 if (q.get('zoom')) SphereView.setZoom(parseFloat(q.get('zoom')));
             }
+            window.addEventListener('message', function (ev) {
+                if (!ev.data || typeof ev.data !== 'object') return;
+                if (ev.data.type === 'ARENA_RESET' && typeof initGame === 'function') initGame(ev.data.seed);
+                if (ev.data.type === 'ARENA_PAUSE' && typeof window.dispatchEvent === 'function') {
+                    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'p' }));
+                }
+            });
         })();
         // Served from a file:// URL, fetch() of the checkpoint is blocked by CORS,
         // so this only activates over http(s). Run `python3 -m http.server` here.
         (async function () {
             if (location.protocol === 'file:') return;
+            const q = new URLSearchParams(location.search);
+            const requestedPolicy = q.get('policy');
+            if (requestedPolicy === 'none' || requestedPolicy === 'heuristic') {
+                setTrainedPolicyEnabled(false, false);
+                return;
+            }
             try {
-                // Newest curriculum checkpoint first (trained on the x2 globe this page
-                // defaults to); fall back to the older torus checkpoint if it is missing.
-                try { await loadTrainedPolicy('models/policy_swarm_sphere_x2.json'); }
-                catch (e) { await loadTrainedPolicy('models/policy_stage0.json'); }
-                setTrainedPolicyEnabled(true, false);
-                setPolicyOverlay(true);
-                setValueHeatmap(true);
-                // Web Worker inference: fetch the two sources the worker is built from.
+                if (requestedPolicy) {
+                    await loadTrainedPolicy(requestedPolicy);
+                } else {
+                    try { await loadTrainedPolicy('models/policy_stage3_sphere_x2_fuel_waves.json'); }
+                    catch (e0) {
+                        try { await loadTrainedPolicy('models/policy_swarm_sphere_x2.json'); }
+                        catch (e1) { await loadTrainedPolicy('models/policy_stage0.json'); }
+                    }
+                }
+                setTrainedPolicyEnabled(true, q.get('det') === '1');
+                setPolicyOverlay(q.get('overlay') !== '0');
+                setValueHeatmap(q.get('heatmap') !== '0');
                 const [nn, worker] = await Promise.all([
                     fetch('training/nn.js').then(r => r.text()),
                     fetch('policy_worker.js').then(r => r.text())

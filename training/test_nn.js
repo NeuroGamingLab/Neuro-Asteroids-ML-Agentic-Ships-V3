@@ -182,6 +182,140 @@ print('Multi-Agent RL (VDN & Counterfactual Credit)');
     check('swarm action diversity is within [0, 1]', metrics.diversity >= 0 && metrics.diversity <= 1);
 })();
 
+print('Factored multi-discrete policy (11 logits -> 48 actions)');
+(function factoredPolicyTests() {
+    const stream = AsteroidsRNG.createStream('factored-grad');
+    const net = new MLP({ inDim: 8, hidden: [12], outDim: NN.FACTOR_TOTAL_LOGITS, orthogonal: true, outGain: 0.01 }, stream);
+    const x = new Float64Array(8);
+    for (let i = 0; i < 8; i++) x[i] = stream() * 2 - 1;
+    const action = 29; // rot=1, thrust=1, fire=2, shield=1
+    const entropyCoef = 0.02;
+
+    const dist = NN.factoredDistribution(net.forward(x));
+    let pSum = 0;
+    for (let i = 0; i < dist.probs.length; i++) pSum += dist.probs[i];
+    check('factored joint probabilities sum to 1 over 48 actions', Math.abs(pSum - 1) < 1e-9, `sum=${pSum}`);
+
+    function lossOnly() {
+        const d = NN.factoredDistribution(net.forward(x));
+        return -d.logProbs[action] - entropyCoef * d.entropy;
+    }
+
+    net.zeroGrad();
+    const { dOut } = NN.factoredGrad(net.forward(x), action, -1, entropyCoef);
+    net.backward(dOut);
+
+    const eps = 1e-6;
+    let maxRelErr = 0;
+    let checked = 0;
+    for (const { arr, grad } of net.getFlatParams()) {
+        const stride = Math.max(1, Math.floor(arr.length / 10));
+        for (let i = 0; i < arr.length; i += stride) {
+            const orig = arr[i];
+            arr[i] = orig + eps; const lp = lossOnly();
+            arr[i] = orig - eps; const lm = lossOnly();
+            arr[i] = orig;
+            const num = (lp - lm) / (2 * eps);
+            const ana = grad[i];
+            const err = Math.abs(num - ana) / Math.max(1e-8, Math.abs(num) + Math.abs(ana));
+            if (err > maxRelErr) maxRelErr = err;
+            checked++;
+        }
+    }
+    check('factored logProb + entropy gradients match finite differences',
+        maxRelErr < 1e-5, `max rel err ${maxRelErr.toExponential(2)} over ${checked} params`);
+})();
+
+print('Entity-Attention encoder (permutation invariance & gradient check)');
+(function entityAttentionTests() {
+    const stream = AsteroidsRNG.createStream('entity-attn');
+    const net = new NN.EntityAttentionNet({
+        baseDim: 4, numTokens: 4, tokenDim: 3, embedDim: 6, hidden: [8], outDim: 5, orthogonal: true
+    }, stream);
+
+    // 3 present tokens + 1 absent pad token
+    const x = new Float64Array([
+        0.2, -0.4, 0.7, 0.1,
+        1, 0.3, 0.8,
+        1, 0.9, 0.2,
+        0, 0.5, 0.5,
+        1, 0.1, 0.6
+    ]);
+    // Permute token slots 0 and 1 -> output must be identical (permutation invariant!)
+    const xPerm = new Float64Array([
+        0.2, -0.4, 0.7, 0.1,
+        1, 0.9, 0.2,
+        1, 0.3, 0.8,
+        0, 0.5, 0.5,
+        1, 0.1, 0.6
+    ]);
+    const out1 = Array.from(net.forward(x));
+    const attnSum = Array.from(net.lastAttentionWeights).reduce((a, b) => a + b, 0);
+    const maskedZero = net.lastAttentionWeights[2] === 0;
+    const out2 = Array.from(net.forward(xPerm));
+    let permDiff = 0;
+    for (let i = 0; i < out1.length; i++) permDiff = Math.max(permDiff, Math.abs(out1[i] - out2[i]));
+    check('entity-attention is permutation invariant', permDiff < 1e-12, `max diff ${permDiff.toExponential(2)}`);
+    check('attention weights sum to 1 and mask absent tokens', Math.abs(attnSum - 1) < 1e-9 && maskedZero);
+
+    // Gradient check across encoder, scorer, and head MLP
+    const target = 3;
+    function lossOnly() {
+        return -logSoftmax(net.forward(x)).logProbs[target];
+    }
+    net.zeroGrad();
+    const { dOut } = lossAndGrad(net, x, target);
+    net.backward(dOut);
+
+    const eps = 1e-6;
+    let maxRelErr = 0;
+    let checked = 0;
+    for (const { arr, grad } of net.getFlatParams()) {
+        const stride = Math.max(1, Math.floor(arr.length / 8));
+        for (let i = 0; i < arr.length; i += stride) {
+            const orig = arr[i];
+            arr[i] = orig + eps; const lp = lossOnly();
+            arr[i] = orig - eps; const lm = lossOnly();
+            arr[i] = orig;
+            const num = (lp - lm) / (2 * eps);
+            const ana = grad[i];
+            const err = Math.abs(num - ana) / Math.max(1e-8, Math.abs(num) + Math.abs(ana));
+            if (err > maxRelErr) maxRelErr = err;
+            checked++;
+        }
+    }
+    check('entity-attention gradients match finite differences',
+        maxRelErr < 1e-5, `max rel err ${maxRelErr.toExponential(2)} over ${checked} params`);
+
+    const restored = NN.networkFromJSON(JSON.parse(JSON.stringify(net.toJSON())));
+    const after = Array.from(restored.forward(x));
+    let serDiff = 0;
+    for (let i = 0; i < out1.length; i++) serDiff = Math.max(serDiff, Math.abs(out1[i] - after[i]));
+    check('entity-attention JSON round-trip is exact', serDiff === 0, `max diff ${serDiff}`);
+})();
+
+print('MAPPO centralized critic, annealing & COMA/VDN credit');
+(function mappoTests() {
+    const trainer = new PPOTrainer({
+        obsDim: 16, globalStateDim: 6, actionSize: 48,
+        actionMode: 'factored', centralizedCritic: true, creditMode: 'coma',
+        hidden: [16], lr: 3e-4, lrEnd: 1e-4, entropyCoef: 0.01, entropyEnd: 0.002,
+        valueClip: 0.2, returnNorm: true, orthogonalInit: true, seed: 'mappo-test'
+    });
+    trainer.setProgress(0.5);
+    check('LR anneals linearly', Math.abs(trainer.currentLr() - 2e-4) < 1e-9);
+    check('entropy coef anneals linearly', Math.abs(trainer.currentEntropyCoef() - 0.006) < 1e-9);
+    const o = new Float64Array(16).fill(0.25);
+    const g = new Float64Array(6).fill(0.5);
+    const act = trainer.act(o, false);
+    const val = trainer.value(o, g);
+    check('MAPPO factored actor & centralized critic produce valid outputs',
+        act.action >= 0 && act.action < 48 && Number.isFinite(val));
+    const round = PPOTrainer.fromJSON(JSON.parse(JSON.stringify(trainer.toJSON({ stage: 3 }))));
+    check('MAPPO checkpoint preserves actionMode and criticMode',
+        round.actionMode === 'factored' && round.centralizedCritic === true && round.globalStateDim === 6);
+})();
+
 print('');
 if (failures === 0) {
     print('ALL NN TESTS PASSED');

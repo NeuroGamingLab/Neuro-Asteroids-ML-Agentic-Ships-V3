@@ -267,6 +267,61 @@ setHudEnabled(false);
     check('and selects the fuel extractor', loaded && loaded.featureOptions.fuelFeatures === true);
 })();
 
+// --- factored (11-logit) + entity-attention (103-dim) + MAPPO centralized critic ---
+(function testAdvancedCheckpointModes() {
+    load('training/ppo.js');
+    const trainer = new PPOTrainer({
+        obsDim: RL_FEATURE_DIM_ENTITY,
+        globalStateDim: GLOBAL_STATE_DIM,
+        featureNames: RL_FEATURE_NAMES_ENTITY.slice(),
+        actionSize: ACTION_SPACE_SIZE,
+        actionMode: 'factored',
+        entityTokens: true,
+        centralizedCritic: true,
+        creditMode: 'coma',
+        hidden: [16],
+        seed: 'runner-adv'
+    });
+    const cp = trainer.toJSON({ stage: 3, world: 'torus', fuelRescue: true, entityTokens: true, centralizedCritic: true });
+    const advRunner = new PolicyRunner();
+    advRunner.loadFromObject(cp);
+    check('factored + entity-attention + MAPPO checkpoint loads', advRunner.actionMode === 'factored' && advRunner.criticMode === 'centralized');
+    check('selects entityTokens extractor', advRunner.featureOptions.entityTokens === true);
+    advRunner.setEnabled(true);
+    advRunner.setDeterministic(true);
+    advRunner.tick();
+    const dec = advRunner.lastDecisions.find(d => d);
+    check('entity-attention runner emits valid 48-way probs and attention weights',
+        dec && dec.probs.length === 48 && Math.abs(dec.probs.reduce((a, b) => a + b, 0) - 1) < 1e-6
+        && Array.isArray(dec.attentionWeights) && dec.attentionWeights.length === ENTITY_TOKEN_SLOTS
+        && Number.isFinite(dec.value));
+
+    // Verify Web Worker handles factored + entity-attention + centralized critic identically
+    const sent = [];
+    const savedPost = globalThis.postMessage;
+    globalThis.postMessage = m => sent.push(m);
+    try {
+        __policyWorkerHandle({
+            type: 'load',
+            actor: cp.actor,
+            critic: cp.critic,
+            actionMode: cp.actionMode,
+            criticMode: cp.criticMode,
+            globalStateDim: cp.globalStateDim,
+            entityTokens: true,
+            seed: 'adv-wkr'
+        });
+        const ob = advRunner.observe();
+        __policyWorkerHandle({ type: 'infer', frame: 1, deterministic: true, agentIds: ob.agentIds, obs: ob.obs, globalState: ob.globalState });
+    } finally {
+        if (savedPost === undefined) delete globalThis.postMessage; else globalThis.postMessage = savedPost;
+    }
+    const res = sent[1];
+    check('worker runs factored + entity-attention + centralized critic',
+        sent[0] && sent[0].type === 'ready' && res && res.decisions.length > 0 && res.decisions[0].action === dec.action);
+    advRunner.setEnabled(false);
+})();
+
 // The overlay draws through the canvas stub; this catches a missing ctx method.
 setPolicyOverlay(true);
 let drewCleanly = true;

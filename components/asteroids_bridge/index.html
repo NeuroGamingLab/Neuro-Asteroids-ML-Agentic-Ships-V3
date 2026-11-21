@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: transparent; width: 100%; }
+  #gameFrame { border: 0; display: block; width: 100%; background: transparent; }
+</style>
+</head>
+<body>
+<iframe id="gameFrame" sandbox="allow-scripts allow-downloads allow-same-origin"></iframe>
+<script>
+// Minimal zero-dependency Streamlit Component v1 bidirectional bridge.
+//
+// Keeps the inner game iframe alive across Streamlit reruns whenever only
+// runtime settings change (sliders, camera, overlays, formations), pushing
+// updates via postMessage instead of restarting the match. Also forwards
+// tactical commands from Python and streams throttled telemetry back to Python.
+(function () {
+    'use strict';
+    const frame = document.getElementById('gameFrame');
+    let currentBootKey = null;
+    let lastCommandNonce = 0;
+    let lastResetNonce = 0;
+    let frameReady = false;
+    let pendingConfig = null;
+    let telemetrySync = false;
+    let lastTelemetryPushMs = 0;
+    const TELEMETRY_PUSH_INTERVAL_MS = 1200;
+
+    function sendToStreamlit(type, data) {
+        window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: type }, data || {}), '*');
+    }
+
+    function setHeight(h) {
+        frame.style.height = h + 'px';
+        sendToStreamlit('streamlit:setFrameHeight', { height: h });
+    }
+
+    frame.addEventListener('load', function () {
+        frameReady = true;
+        if (pendingConfig && frame.contentWindow) {
+            frame.contentWindow.postMessage({ type: 'ASTEROIDS_UPDATE_CONFIG', config: pendingConfig }, '*');
+            pendingConfig = null;
+        }
+    });
+
+    window.addEventListener('message', function (event) {
+        const msg = event.data;
+        if (!msg || typeof msg !== 'object') return;
+
+        // Incoming render from Streamlit Python host
+        if (msg.type === 'streamlit:render') {
+            const args = msg.args || {};
+            const height = Number(args.height) || 870;
+            setHeight(height);
+            telemetrySync = !!args.telemetrySync;
+
+            if (args.bootKey !== currentBootKey) {
+                currentBootKey = args.bootKey;
+                frameReady = false;
+                pendingConfig = null;
+                frame.srcdoc = args.html || '';
+            } else if (args.config) {
+                if (frameReady && frame.contentWindow) {
+                    frame.contentWindow.postMessage({ type: 'ASTEROIDS_UPDATE_CONFIG', config: args.config }, '*');
+                } else {
+                    pendingConfig = args.config;
+                }
+            }
+
+            if (args.commandNonce && args.commandNonce !== lastCommandNonce && args.command) {
+                lastCommandNonce = args.commandNonce;
+                if (frameReady && frame.contentWindow) {
+                    frame.contentWindow.postMessage({
+                        type: 'COMMAND_INTERVENE',
+                        command: args.command,
+                        payload: args.commandPayload || null
+                    }, '*');
+                }
+            }
+
+            if (args.resetNonce && args.resetNonce !== lastResetNonce) {
+                lastResetNonce = args.resetNonce;
+                if (frameReady && frame.contentWindow) {
+                    frame.contentWindow.postMessage({ type: 'ASTEROIDS_RESET_GAME', seed: args.resetSeed }, '*');
+                }
+            }
+            return;
+        }
+
+        // Outgoing telemetry from inner game iframe -> Streamlit Python
+        if (msg.type === 'ASTEROIDS_TELEMETRY' && telemetrySync) {
+            const now = Date.now();
+            if (now - lastTelemetryPushMs >= TELEMETRY_PUSH_INTERVAL_MS) {
+                lastTelemetryPushMs = now;
+                sendToStreamlit('streamlit:setComponentValue', { value: msg.payload });
+            }
+        }
+    });
+
+    sendToStreamlit('streamlit:componentReady', { apiVersion: 1 });
+})();
+</script>
+</body>
+</html>

@@ -40,6 +40,39 @@ const RL_FUEL_FEATURE_NAMES = [
 const RL_FEATURE_NAMES_FUEL = RL_FEATURE_NAMES.concat(RL_FUEL_FEATURE_NAMES);
 const RL_FEATURE_DIM_FUEL = RL_FEATURE_NAMES_FUEL.length;
 
+// Multi-entity token slots (Phase 4): 10 tokens x 6 features = 60 dims appended
+// after RL_FEATURE_NAMES_FUEL (total 103 dims) when { entityTokens: true }.
+// Token slots: 3 asteroids, 3 enemies/bosses, 2 incoming bullets, 2 allies.
+// Every token begins with a presence indicator (1 = present, 0 = empty pad)
+// so EntityAttentionNet can apply exact masked permutation-invariant attention.
+const ENTITY_TOKEN_SLOTS = 10;
+const ENTITY_TOKEN_DIM = 6;
+const RL_ENTITY_TOKEN_NAMES = (function () {
+    const labels = [
+        'entAst0', 'entAst1', 'entAst2',
+        'entEne0', 'entEne1', 'entEne2',
+        'entBul0', 'entBul1',
+        'entAly0', 'entAly1'
+    ];
+    const fields = ['Present', 'Dist', 'Bearing', 'RelVx', 'RelVy', 'Attr'];
+    const out = [];
+    for (const lbl of labels) for (const f of fields) out.push(lbl + f);
+    return out;
+})();
+const RL_FEATURE_NAMES_ENTITY = RL_FEATURE_NAMES_FUEL.concat(RL_ENTITY_TOKEN_NAMES);
+const RL_FEATURE_DIM_ENTITY = RL_FEATURE_NAMES_ENTITY.length;
+
+// Global team-state vector for MAPPO Centralized Critic training (12 dims).
+// Used only during training (and optional critic inspection); actors remain
+// strictly decentralized over local observations.
+const GLOBAL_STATE_NAMES = [
+    'teamAliveFrac', 'teamMeanHealth', 'teamMinHealth', 'alphaAlive',
+    'alphaFuelGlobal', 'alphaHelpGlobal', 'tankerAlive',
+    'globalAsteroidNorm', 'globalEnemyNorm', 'globalBossNorm',
+    'globalBulletNorm', 'globalWaveNorm'
+];
+const GLOBAL_STATE_DIM = GLOBAL_STATE_NAMES.length;
+
 class MLFeatureExtractor {
     static clamp01(value) {
         return Math.max(0, Math.min(1, value));
@@ -50,14 +83,23 @@ class MLFeatureExtractor {
         return MLFeatureExtractor.clamp01((value - min) / (max - min));
     }
 
+    // Tangent-plane offset from (ax, ay) to (bx, by). On the flat torus this is
+    // plain (bx - ax, by - ay); on the 3D sphere it delegates to WORLD.delta() so
+    // distances and bearings stay exact across the antimeridian and near the poles.
+    static relDelta(ax, ay, bx, by) {
+        if (typeof WORLD !== 'undefined' && WORLD && WORLD.isSphere()) {
+            return WORLD.delta(ax, ay, bx, by);
+        }
+        return { dx: bx - ax, dy: by - ay };
+    }
+
     static findNearestEntity(agent, entities, maxDistance = Infinity) {
         let nearest = null;
         let nearestDistance = Infinity;
 
         entities.forEach(entity => {
             if (!entity) return;
-            const dx = entity.x - agent.x;
-            const dy = entity.y - agent.y;
+            const { dx, dy } = MLFeatureExtractor.relDelta(agent.x, agent.y, entity.x, entity.y);
             const distance = Math.sqrt(dx * dx + dy * dy);
             if (distance < nearestDistance && distance <= maxDistance) {
                 nearestDistance = distance;
@@ -79,8 +121,7 @@ class MLFeatureExtractor {
 
         const scores = entities.map(entity => {
             if (!entity) return 0;
-            const dx = entity.x - agent.x;
-            const dy = entity.y - agent.y;
+            const { dx, dy } = MLFeatureExtractor.relDelta(agent.x, agent.y, entity.x, entity.y);
             const distance = Math.sqrt(dx * dx + dy * dy);
             if (distance <= 0) return 1;
 
@@ -118,8 +159,7 @@ class MLFeatureExtractor {
         const flockRadius = ship.flockRadius || 150;
         (aiShips || []).forEach(other => {
             if (!other || other === ship) return;
-            const dx = other.x - ship.x;
-            const dy = other.y - ship.y;
+            const { dx, dy } = MLFeatureExtractor.relDelta(ship.x, ship.y, other.x, other.y);
             const distance = Math.sqrt(dx * dx + dy * dy);
             if (distance < flockRadius) nearbyAllies++;
             if (!nearestAlly || distance < nearestAlly.distance) {
@@ -142,8 +182,7 @@ class MLFeatureExtractor {
         if (typeof ship.calculateFormationPositionAdvanced === 'function') {
             const target = ship.calculateFormationPositionAdvanced(aiShips || []);
             if (target) {
-                const dx = target.x - ship.x;
-                const dy = target.y - ship.y;
+                const { dx, dy } = MLFeatureExtractor.relDelta(ship.x, ship.y, target.x, target.y);
                 formationError = MLFeatureExtractor.clamp01(Math.sqrt(dx * dx + dy * dy) / 200);
             }
         }
@@ -242,7 +281,7 @@ class MLFeatureExtractor {
 
         Object.assign(features, extras);
 
-        if (options.fuelFeatures) {
+        if (options.fuelFeatures || options.entityTokens) {
             let alpha = null;
             let tanker = null;
             (aiShips || []).forEach(other => {
@@ -255,8 +294,7 @@ class MLFeatureExtractor {
             let tankerDistance = 1;
             let tankerBearing = 0.5;
             if (tanker && tanker !== ship) {
-                const dx = tanker.x - ship.x;
-                const dy = tanker.y - ship.y;
+                const { dx, dy } = MLFeatureExtractor.relDelta(ship.x, ship.y, tanker.x, tanker.y);
                 tankerDistance = MLFeatureExtractor.clamp01(Math.sqrt(dx * dx + dy * dy) / 600);
                 const delta = MLFeatureExtractor.angleDelta(heading, Math.atan2(dy, dx));
                 tankerBearing = (delta / Math.PI + 1) / 2;
@@ -270,12 +308,118 @@ class MLFeatureExtractor {
                 tankerBearing,
                 fuelLinked: (ship.fuelDocked || ship.fuelTransferActive) ? 1 : 0
             });
+
+            if (options.entityTokens) {
+                const tokenVec = MLFeatureExtractor.extractEntityTokens(
+                    ship, asteroids, aiShips, enemyShips, enemyBullets, heading
+                );
+                for (let idx = 0; idx < RL_ENTITY_TOKEN_NAMES.length; idx++) {
+                    features[RL_ENTITY_TOKEN_NAMES[idx]] = tokenVec[idx];
+                }
+                features._entities = tokenVec._entities;
+                features._vector = RL_FEATURE_NAMES_ENTITY.map(name => features[name]);
+                return features;
+            }
+
             features._vector = RL_FEATURE_NAMES_FUEL.map(name => features[name]);
             return features;
         }
 
         features._vector = RL_FEATURE_NAMES.map(name => features[name]);
         return features;
+    }
+
+    // Build fixed-layout 10 x 6 entity tokens: [present, distNorm, bearingNorm,
+    // relVxNorm, relVyNorm, attrNorm] for top-3 asteroids, top-3 enemies/bosses,
+    // top-2 enemy bullets, and top-2 allies. Also stores `_entities` refs for
+    // 3D attention-beam visualization.
+    static extractEntityTokens(ship, asteroids, aiShips, enemyShips, enemyBullets, heading) {
+        const out = new Array(ENTITY_TOKEN_SLOTS * ENTITY_TOKEN_DIM).fill(0);
+        const refs = new Array(ENTITY_TOKEN_SLOTS).fill(null);
+
+        function nearestK(list, k, maxDist, exclude) {
+            if (!list || !list.length) return [];
+            const scored = [];
+            for (let i = 0; i < list.length; i++) {
+                const e = list[i];
+                if (!e || e === exclude) continue;
+                const { dx, dy } = MLFeatureExtractor.relDelta(ship.x, ship.y, e.x, e.y);
+                const dist = Math.hypot(dx, dy);
+                if (dist <= maxDist) scored.push({ e, dx, dy, dist });
+            }
+            scored.sort((a, b) => a.dist - b.dist);
+            return scored.slice(0, k);
+        }
+
+        function writeSlot(slotIdx, item, maxDist, attrVal) {
+            if (!item) return;
+            const off = slotIdx * ENTITY_TOKEN_DIM;
+            const bearing = MLFeatureExtractor.angleDelta(heading, Math.atan2(item.dy, item.dx));
+            const rvx = ((item.e.velocityX || 0) - (ship.velocityX || 0));
+            const rvy = ((item.e.velocityY || 0) - (ship.velocityY || 0));
+            out[off] = 1;
+            out[off + 1] = MLFeatureExtractor.clamp01(item.dist / maxDist);
+            out[off + 2] = (bearing / Math.PI + 1) / 2;
+            out[off + 3] = MLFeatureExtractor.clamp01((rvx / 10 + 1) / 2);
+            out[off + 4] = MLFeatureExtractor.clamp01((rvy / 10 + 1) / 2);
+            out[off + 5] = MLFeatureExtractor.clamp01(attrVal);
+            refs[slotIdx] = item.e;
+        }
+
+        const topAst = nearestK(asteroids, 3, 500, null);
+        for (let i = 0; i < topAst.length; i++) {
+            writeSlot(i, topAst[i], 500, (topAst[i].e.radius || 20) / 50);
+        }
+        const topEne = nearestK(enemyShips, 3, 700, null);
+        for (let i = 0; i < topEne.length; i++) {
+            const isBoss = topEne[i].e.type === 'boss' || topEne[i].e.aiType === 'boss';
+            writeSlot(3 + i, topEne[i], 700, isBoss ? 1.0 : Math.min(0.8, (topEne[i].e.health || 1) / 5));
+        }
+        const topBul = nearestK(enemyBullets, 2, 400, null);
+        for (let i = 0; i < topBul.length; i++) {
+            writeSlot(6 + i, topBul[i], 400, 1.0);
+        }
+        const topAly = nearestK(aiShips, 2, 600, ship);
+        for (let i = 0; i < topAly.length; i++) {
+            writeSlot(8 + i, topAly[i], 600, topAly[i].e.isAlpha ? 1.0 : (topAly[i].e.health || 3) / 6);
+        }
+
+        out._entities = refs;
+        return out;
+    }
+
+    // Global team-state vector for MAPPO Centralized Critic (12 dims).
+    static extractGlobalState(aiShips, asteroids, enemyShips, enemyBullets, options = {}) {
+        const ships = (aiShips || []).filter(Boolean);
+        const maxAgents = Math.max(1, options.numAgents || ships.length || 3);
+        let hpSum = 0;
+        let hpMin = 1;
+        let alpha = null;
+        let tankerAlive = 0;
+        for (const s of ships) {
+            const frac = MLFeatureExtractor.clamp01((s.health || 0) / Math.max(1, s.maxHealth || 3));
+            hpSum += frac;
+            if (frac < hpMin) hpMin = frac;
+            if (s.isAlpha) alpha = s;
+            if (s.role === 'fuel') tankerAlive = 1;
+        }
+        const bosses = (enemyShips || []).filter(e => e && (e.type === 'boss' || e.aiType === 'boss')).length;
+        const regEnemies = (enemyShips || []).filter(Boolean).length - bosses;
+        const waveNum = (typeof waveState !== 'undefined' && waveState) ? (waveState.wave || 0) : 0;
+        return [
+            MLFeatureExtractor.clamp01(ships.length / maxAgents),
+            ships.length ? hpSum / ships.length : 0,
+            ships.length ? hpMin : 0,
+            alpha ? 1 : 0,
+            alpha && alpha.maxFuel > 0 ? MLFeatureExtractor.clamp01((alpha.fuel || 0) / alpha.maxFuel) : 1,
+            alpha && alpha.helpPingActive ? 1 : 0,
+            tankerAlive,
+            MLFeatureExtractor.clamp01((asteroids || []).length / 15),
+            MLFeatureExtractor.clamp01(regEnemies / 10),
+            MLFeatureExtractor.clamp01(bosses / 4),
+            MLFeatureExtractor.clamp01((enemyBullets || []).length / 30),
+            MLFeatureExtractor.clamp01(waveNum / 10)
+        ];
     }
 
     static toLegacy13(features) {
@@ -305,6 +449,22 @@ class MLFeatureExtractor {
     }
 }
 
+if (typeof globalThis !== 'undefined') {
+    globalThis.MLFeatureExtractor = MLFeatureExtractor;
+    globalThis.CANONICAL_FEATURE_DIM = CANONICAL_FEATURE_DIM;
+    globalThis.CANONICAL_FEATURE_NAMES = CANONICAL_FEATURE_NAMES;
+    globalThis.RL_FEATURE_NAMES = RL_FEATURE_NAMES;
+    globalThis.RL_FEATURE_DIM = RL_FEATURE_DIM;
+    globalThis.RL_FEATURE_NAMES_FUEL = RL_FEATURE_NAMES_FUEL;
+    globalThis.RL_FEATURE_DIM_FUEL = RL_FEATURE_DIM_FUEL;
+    globalThis.ENTITY_TOKEN_SLOTS = ENTITY_TOKEN_SLOTS;
+    globalThis.ENTITY_TOKEN_DIM = ENTITY_TOKEN_DIM;
+    globalThis.RL_ENTITY_TOKEN_NAMES = RL_ENTITY_TOKEN_NAMES;
+    globalThis.RL_FEATURE_NAMES_ENTITY = RL_FEATURE_NAMES_ENTITY;
+    globalThis.RL_FEATURE_DIM_ENTITY = RL_FEATURE_DIM_ENTITY;
+    globalThis.GLOBAL_STATE_NAMES = GLOBAL_STATE_NAMES;
+    globalThis.GLOBAL_STATE_DIM = GLOBAL_STATE_DIM;
+}
 if (typeof window !== 'undefined') {
     window.MLFeatureExtractor = MLFeatureExtractor;
     window.CANONICAL_FEATURE_DIM = CANONICAL_FEATURE_DIM;
@@ -313,6 +473,9 @@ if (typeof window !== 'undefined') {
     window.RL_FEATURE_DIM = RL_FEATURE_DIM;
     window.RL_FEATURE_NAMES_FUEL = RL_FEATURE_NAMES_FUEL;
     window.RL_FEATURE_DIM_FUEL = RL_FEATURE_DIM_FUEL;
+    window.RL_FEATURE_NAMES_ENTITY = RL_FEATURE_NAMES_ENTITY;
+    window.RL_FEATURE_DIM_ENTITY = RL_FEATURE_DIM_ENTITY;
+    window.GLOBAL_STATE_DIM = GLOBAL_STATE_DIM;
     window.marlCurriculumStage = 3;
     window.setMARLCurriculumStage = function(stage) {
         window.marlCurriculumStage = Math.max(0, Math.min(3, stage));

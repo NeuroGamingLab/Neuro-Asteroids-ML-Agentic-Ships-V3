@@ -165,12 +165,38 @@ st.markdown("---")
 # set it through st.session_state before the widgets render on the rerun.
 # ---------------------------------------------------------------------------
 
-# Published PPO checkpoints. A run is only published if it significantly beat
-# the rule-based controller on held-out seeds, so anything listed here has
-# already cleared that bar.
-policy_files = sorted(glob.glob(os.path.join("models", "policy_*.json")))
+# Published PPO checkpoints. Prefer models/registry.json (ranked by held-out
+# return, world compatibility, and feature coverage) and fall back to globbing
+# models/policy_*.json if no registry has been generated yet.
+def load_model_registry():
+    reg_path = os.path.join(POLICY_DIR, "registry.json")
+    if os.path.exists(reg_path):
+        try:
+            with open(reg_path, "r") as handle:
+                reg = json.load(handle)
+            models = [m for m in reg.get("models", []) if os.path.exists(m.get("path", ""))]
+            if models:
+                return reg, models
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+    paths = sorted(glob.glob(os.path.join(POLICY_DIR, "policy_*.json")))
+    return None, [{"path": p, "name": os.path.splitext(os.path.basename(p))[0]} for p in paths]
+
+
+model_registry, registry_entries = load_model_registry()
+registry_by_path = {m["path"]: m for m in registry_entries}
+policy_files = [m["path"] for m in registry_entries]
+default_policy_path = (
+    (model_registry.get("defaults", {}).get("sphere") if model_registry else None)
+    or (policy_files[0] if policy_files else "none")
+)
+if default_policy_path not in policy_files:
+    default_policy_path = policy_files[0] if policy_files else "none"
 
 # Widget keys and their defaults. Presets override a subset of these.
+# Legacy TensorFlow.js / scaffolding MARL options stay off by default so the
+# browser does not fetch unused ~1.5 MB CDN bundles or fill an unconsumed replay
+# buffer; the working headless-trained PPO policy drives the swarm directly.
 DEFAULTS = {
     "num_ai_ships": 10, "num_enemy_ships": 10, "num_boss_ships": 10,
     "canvas_width": 1200, "canvas_height": 600,
@@ -179,13 +205,13 @@ DEFAULTS = {
     "auto_assign_roles": True, "fuel_rescue_enabled": True,
     "adaptive_formation": True, "multi_target_mode": "focus", "escort_mode": "guard",
     "tactical_sequences": True, "formation_transitions": True, "advanced_flanking": True,
-    "ml_data_collection": True, "ml_hierarchy_enabled": True, "ml_evaluation_enabled": True,
+    "ml_data_collection": False, "ml_hierarchy_enabled": False, "ml_evaluation_enabled": False,
     "curriculum_stage": "3: Full Chaos",
-    "nn_models_enabled": True, "ml_enabled": True, "ml_mode": "full",
-    "marl_enabled": True, "marl_training": True,
+    "nn_models_enabled": False, "ml_enabled": False, "ml_mode": "parameters",
+    "marl_enabled": False, "marl_training": False,
     "trained_policy_enabled": True,
-    "trained_policy_path": policy_files[-1] if policy_files else "none",
-    "trained_policy_deterministic": True, "policy_overlay": True,
+    "trained_policy_path": default_policy_path,
+    "trained_policy_deterministic": False, "policy_overlay": True,
     "policy_worker": True, "value_heatmap": True, "action_wheels": True,
     "fx_enabled": True, "hud_enabled": True,
     "sfx_enabled": True, "music_enabled": True, "kill_cam_enabled": True,
@@ -345,8 +371,22 @@ with st.sidebar:
             )
             if trained_policy_enabled:
                 if st.session_state.get("trained_policy_path") not in policy_files:
-                    st.session_state["trained_policy_path"] = policy_files[-1]
-                trained_policy_path = st.selectbox("Checkpoint", policy_files, key="trained_policy_path")
+                    st.session_state["trained_policy_path"] = default_policy_path
+                def _fmt_policy(path):
+                    info = registry_by_path.get(path)
+                    if not info or "world" not in info:
+                        return os.path.basename(path)
+                    tags = [f"{info['world']} x{info.get('worldScale', 1):g}", f"{info.get('obsDim', 38)}d"]
+                    if info.get("fuelFeatures"):
+                        tags.append("fuel")
+                    if info.get("waves"):
+                        tags.append("waves")
+                    if info.get("actionMode") and info["actionMode"] != "flat":
+                        tags.append(info["actionMode"])
+                    return f"{info['name']} ({', '.join(tags)})"
+                trained_policy_path = st.selectbox(
+                    "Checkpoint", policy_files, key="trained_policy_path", format_func=_fmt_policy
+                )
                 trained_policy_deterministic = st.toggle(
                     "Deterministic (argmax)", key="trained_policy_deterministic",
                     help=("Off samples from the action distribution, which is how the policy was "
@@ -358,14 +398,34 @@ with st.sidebar:
                           "one frame (16 ms). Falls back to the main thread if workers are unavailable.")
                 )
                 try:
-                    meta = load_policy_file(trained_policy_path).get("meta", {})
+                    loaded_cp = load_policy_file(trained_policy_path)
+                    meta = loaded_cp.get("meta", {})
+                    cp_world = meta.get("world", "torus")
+                    cp_scale = meta.get("worldScale", 1)
+                    cp_obs = loaded_cp.get("obsDim", 38)
+                    cp_action_mode = loaded_cp.get("actionMode", "flat")
+                    cp_fuel = cp_obs >= 43
                     st.caption(
-                        f"stage {meta.get('stage', '?')} · {meta.get('trainedSteps', 0):,} env steps · "
-                        f"eval return {meta.get('evalMeanReturn', float('nan')):.1f} "
-                        f"vs rule-based {meta.get('heuristicMeanReturn', float('nan')):.1f}"
+                        f"stage {meta.get('stage', '?')} · {cp_world}"
+                        + (f" x{cp_scale:g}" if cp_world == "sphere" else "")
+                        + f" · {cp_obs}-dim ({cp_action_mode}) · {meta.get('trainedSteps', 0):,} steps · "
+                        f"return {meta.get('evalMeanReturn', float('nan')):.1f} "
+                        f"vs rules {meta.get('heuristicMeanReturn', float('nan')):.1f}"
                     )
                     if meta.get("beatsRandom") is False:
                         st.caption("Note: beat the rule-based controller but not random action selection.")
+                    mismatches = []
+                    active_world = "sphere" if sphere_on else "torus"
+                    if cp_world != active_world:
+                        mismatches.append(f"trained on {cp_world}, active world is {active_world}")
+                    elif active_world == "sphere" and abs(float(cp_scale) - float(world_scale)) > 0.05:
+                        mismatches.append(f"trained at x{cp_scale:g}, active scale is x{world_scale:g}")
+                    if fuel_rescue_enabled and alpha_attack_enabled and not cp_fuel:
+                        mismatches.append("38-dim policy has no fuel-rescue inputs")
+                    if waves_enabled and not meta.get("waves"):
+                        mismatches.append("trained without escalating waves")
+                    if mismatches:
+                        st.info("Off-distribution notice: " + "; ".join(mismatches) + ".")
                 except (OSError, ValueError):
                     st.warning("Could not read metadata from this checkpoint.")
 
@@ -416,22 +476,48 @@ with st.sidebar:
     # ------------------------------------------------------------------ Telemetry & Mission Control
     with tab_telemetry:
         st.subheader("🛰 Mission Control Telemetry")
-        st.caption("Bidirectional telemetry streaming between Streamlit and the Asteroids simulation.")
+        st.caption("Bidirectional live bridge: sidebar tweaks hot-update the simulation without restarting, and telemetry streams back to Python.")
 
-        st.markdown("**Tactical Intervention Console:**")
+        bridge_enabled = st.toggle(
+            "Bidirectional live bridge (no reload on tweaks)",
+            value=True,
+            key="bridge_enabled",
+            help="Uses components/asteroids_bridge to push config diffs via postMessage instead of restarting the game on every slider drag."
+        )
+        telemetry_sync = st.toggle(
+            "Stream live telemetry to Python charts",
+            value=False,
+            key="telemetry_sync",
+            help="Streams throttled (~0.8 Hz) game telemetry back to Streamlit for live metrics and sparkline charts below."
+        )
+
+        st.markdown("**Tactical Intervention Console (Live Dispatch):**")
+        st.session_state.setdefault("mc_cmd_nonce", 0)
+        st.session_state.setdefault("mc_cmd_name", None)
+        st.session_state.setdefault("mc_reset_nonce", 0)
         col_t1, col_t2 = st.columns(2)
         with col_t1:
-            st.info("⚡ **Railgun Pod**\nDrops piercing ion powerup")
-            st.info("💥 **Orbital EMP**\nStuns all hostile craft 2.5s")
+            if st.button("⚡ Railgun Pod", use_container_width=True, help="Drops piercing ion powerup"):
+                st.session_state["mc_cmd_nonce"] += 1
+                st.session_state["mc_cmd_name"] = "AIRDROP_RAILGUN"
+            if st.button("💥 Orbital EMP", use_container_width=True, help="Stuns all hostile craft 2.5s"):
+                st.session_state["mc_cmd_nonce"] += 1
+                st.session_state["mc_cmd_name"] = "DETONATE_EMP"
         with col_t2:
-            st.info("🛡 **Swarm Barrier**\nSynchronizes forcefields")
-            st.info("⛽ **Emergency Fuel**\nRefills fleet & alpha tanks")
+            if st.button("🛡 Swarm Barrier", use_container_width=True, help="Synchronizes forcefields"):
+                st.session_state["mc_cmd_nonce"] += 1
+                st.session_state["mc_cmd_name"] = "OVERCHARGE_SHIELDS"
+            if st.button("⛽ Emergency Fuel", use_container_width=True, help="Refills fleet & alpha tanks"):
+                st.session_state["mc_cmd_nonce"] += 1
+                st.session_state["mc_cmd_name"] = "EMERGENCY_REFUEL"
+        if st.button("↻ Restart Match (Keep Settings)", use_container_width=True):
+            st.session_state["mc_reset_nonce"] += 1
 
         telemetry_rate = st.slider("Telemetry Broadcast Rate", 5, 60, step=5, value=10, key="telemetry_rate",
                                    help="Interval in game frames between broadcast telemetry packets (10 frames ≈ 6 Hz).")
-        st.caption("Use the interactive Mission Control bar below the canvas or press `T` to toggle the live in-canvas flight telemetry HUD.")
+        st.caption("Standalone tools (when served via HTTP): `arena.html` (A/B Policy Arena) · `replay.html` (Flight Log Scrubber).")
 
-        with st.expander("MARL Value Decomposition (VDN)", expanded=True):
+        with st.expander("MARL Value Decomposition (VDN)", expanded=False):
             st.markdown(r"""
             **Cooperative Swarm Objective:**
             $$\mathcal{V}_{team}(\mathbf{o}) = \sum_{i=1}^N \mathcal{V}_i(o_i)$$
@@ -441,7 +527,7 @@ with st.sidebar:
             st.caption("Live credit decomposition and swarm entropy are rendered on the in-game HUD and included in telemetry logs.")
 
         with st.expander("Flight Recorder & Export"):
-            st.caption("Export high-resolution telemetry log containing past agent trajectories, fuel levels, subsystem integrity, and MARL metrics directly from the browser Mission Control bar.")
+            st.caption("Export high-resolution telemetry JSON directly from the Mission Control bar, then inspect frame-by-frame in `replay.html`.")
 
     # ------------------------------------------------------------------ Visuals
     with tab_visual:
@@ -568,6 +654,7 @@ def get_game_html(num_ai_ships, num_enemy_ships, num_boss_ships, canvas_width, c
             policy_error = f"{type(exc).__name__}: {exc}"
 
     # Combine into single HTML
+    tfjs_scripts = f"{TFJS_TAG}\n        {TFJS_WASM_TAG}" if (nn_models_enabled or ml_enabled) else ""
     html = f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -575,8 +662,7 @@ def get_game_html(num_ai_ships, num_enemy_ships, num_boss_ships, canvas_width, c
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         {THREE_JS_TAG if sphere_world else ""}
-        {TFJS_TAG}
-        {TFJS_WASM_TAG}
+        {tfjs_scripts}
         <style>
         {css}
         body {{
@@ -807,337 +893,137 @@ def get_game_html(num_ai_ships, num_enemy_ships, num_boss_ships, canvas_width, c
             }}
         }})();
 
-        // Set number of AI ships from Streamlit
+        // Unified one-shot configuration (replaces legacy 2-second polling loops)
+        // and live hot-update listener for bidirectional bridge messages.
         (function() {{
-            const targetCount = {num_ai_ships};
-            if (typeof setNumAIShips === 'function') {{
-                setNumAIShips(targetCount);
-            }} else {{
-                // Wait for function to be available
-                setTimeout(function() {{
-                    if (typeof setNumAIShips === 'function') {{
-                        setNumAIShips(targetCount);
-                    }}
-                }}, 100);
-            }}
-        }})();
-        
-        // Set number of enemy ships from Streamlit
-        (function() {{
-            const targetCount = {num_enemy_ships};
-            if (typeof setNumEnemyShips === 'function') {{
-                setNumEnemyShips(targetCount);
-            }} else {{
-                // Wait for function to be available
-                setTimeout(function() {{
-                    if (typeof setNumEnemyShips === 'function') {{
-                        setNumEnemyShips(targetCount);
-                    }}
-                }}, 100);
-            }}
-        }})();
-        
-        // Set number of boss ships from Streamlit
-        (function() {{
-            const targetCount = {num_boss_ships};
-            if (typeof setNumBossShips === 'function') {{
-                setNumBossShips(targetCount);
-            }} else {{
-                // Wait for function to be available
-                setTimeout(function() {{
-                    if (typeof setNumBossShips === 'function') {{
-                        setNumBossShips(targetCount);
-                    }}
-                }}, 100);
-            }}
-        }})();
-        
-        // Set canvas size from Streamlit
-        (function() {{
-            const width = {canvas_width};
-            const height = {canvas_height};
-            if (typeof setCanvasSize === 'function') {{
-                setCanvasSize(width, height);
-            }} else {{
-                // Wait for function to be available
-                setTimeout(function() {{
-                    if (typeof setCanvasSize === 'function') {{
-                        setCanvasSize(width, height);
-                    }}
-                }}, 100);
-            }}
-        }})();
-        
-        // Set player ship active state from Streamlit
-        (function() {{
-            // Default to true if not explicitly set
-            const activeState = {str(player_ship_active).lower()};
-            const isActive = activeState === 'true' || activeState === true;
-            
-            // Set state immediately if function is available
-            if (typeof setPlayerShipActive === 'function') {{
-                setPlayerShipActive(isActive);
-            }}
-            
-            // Ensure function is called after game initialization
-            function setActiveState() {{
-                if (typeof setPlayerShipActive === 'function') {{
-                    setPlayerShipActive(isActive);
-                }} else {{
-                    setTimeout(setActiveState, 100);
-                }}
-            }}
-            
-            // Wait for game to initialize, then set state again to ensure it sticks
-            setTimeout(setActiveState, 300);
-            
-            // Also set it periodically to override any resets (but less frequently)
-            setInterval(function() {{
-                if (typeof setPlayerShipActive === 'function') {{
-                    setPlayerShipActive(isActive);
-                }}
-            }}, 2000);
-        }})();
-        
-        // Set ML mode from Streamlit
-        (function() {{
-            const mlState = {str(ml_enabled).lower()};
-            const mlEnabled = mlState === 'true' || mlState === true;
-            const mlMode = {js_string(ml_mode)};
-            
-            // Set state immediately if function is available
-            if (typeof setMLMode === 'function') {{
-                setMLMode(mlEnabled, mlMode);
-            }}
-            
-            // Ensure function is called after game initialization
-            function setMLState() {{
-                if (typeof setMLMode === 'function') {{
-                    setMLMode(mlEnabled, mlMode);
-                }} else {{
-                    setTimeout(setMLState, 100);
-                }}
-            }}
-            
-            // Wait for game to initialize, then set state again to ensure it sticks
-            setTimeout(setMLState, 300);
-            
-            // Also set it periodically to override any resets (but less frequently)
-            setInterval(function() {{
-                if (typeof setMLMode === 'function') {{
-                    setMLMode(mlEnabled);
-                }}
-            }}, 2000);
-        }})();
-        
-        // Set MARL mode from Streamlit
-        (function() {{
-            const marlState = {str(marl_enabled).lower()};
-            const marlTrainingState = {str(marl_training).lower()};
-            const marlEnabled = marlState === 'true' || marlState === true;
-            const marlTraining = marlTrainingState === 'true' || marlTrainingState === true;
-            
-            // Set state immediately if function is available
-            if (typeof setMARLMode === 'function') {{
-                setMARLMode(marlEnabled, marlTraining);
-            }}
-            
-            // Ensure function is called after game initialization
-            function setMARLState() {{
-                if (typeof setMARLMode === 'function') {{
-                    setMARLMode(marlEnabled, marlTraining);
-                }} else {{
-                    setTimeout(setMARLState, 100);
-                }}
-            }}
-            
-            // Wait for game to initialize, then set state again to ensure it sticks
-            setTimeout(setMARLState, 500);
-            
-            // Also set it periodically to override any resets (but less frequently)
-            setInterval(function() {{
-                if (typeof setMARLMode === 'function') {{
-                    setMARLMode(marlEnabled, marlTraining);
-                }}
-            }}, 2000);
-        }})();
-        
-        // Advanced ML Phase 6 configuration
-        (function() {{
-            const dataCollection = {str(ml_data_collection).lower()};
-            const hierarchy = {str(ml_hierarchy_enabled).lower()};
-            const evaluation = {str(ml_evaluation_enabled).lower()};
-            const curriculum = {curriculum_stage};
-            const nnEnabled = {str(nn_models_enabled).lower()};
-            const mlEnabledState = {str(ml_enabled).lower()};
-            
-            function initAdvancedML() {{
-                if (typeof setMLDataCollection === 'function') {{
-                    setMLDataCollection(dataCollection === 'true' || dataCollection === true);
-                }}
-                if (typeof setMLHierarchy === 'function') {{
-                    setMLHierarchy(hierarchy === 'true' || hierarchy === true);
-                }}
-                if (typeof setMLEvaluation === 'function') {{
-                    setMLEvaluation(evaluation === 'true' || evaluation === true, mlEnabledState === 'true');
-                }}
-                if (typeof setMARLCurriculumStage === 'function') {{
-                    setMARLCurriculumStage(curriculum);
-                }}
-                if (typeof initializeMARLDataCollector === 'function') {{
-                    initializeMARLDataCollector();
-                }}
-                if (nnEnabled === 'true' || nnEnabled === true) {{
-                    if (typeof setNeuralNetworkModels === 'function') {{
-                        setNeuralNetworkModels(true, {{
-                            version: {js_string(model_version)},
-                            multiTaskModelPath: {js_string(multitask_model_path)},
-                            parameterModelPath: {js_string(parameter_model_path)},
-                            priorityModelPath: {js_string(priority_model_path)},
-                            actionModelPath: {js_string(action_model_path)},
-                            preferWasm: {str(prefer_wasm).lower()}
-                        }});
-                    }}
-                }}
-            }}
-            
-            setTimeout(initAdvancedML, 400);
-            setTimeout(initAdvancedML, 1000);
-        }})();
-        
-        // Set Alpha Attack mode from Streamlit
-        (function() {{
-            const alphaState = {str(alpha_attack_enabled).lower()};
-            const alphaEnabled = alphaState === 'true' || alphaState === true;
-            
-            // Set state immediately if function is available
-            if (typeof setAlphaAttackEnabled === 'function') {{
-                setAlphaAttackEnabled(alphaEnabled);
-            }}
-            
-            // Ensure function is called after game initialization
-            function setAlphaState() {{
-                if (typeof setAlphaAttackEnabled === 'function') {{
-                    setAlphaAttackEnabled(alphaEnabled);
-                }} else {{
-                    setTimeout(setAlphaState, 100);
-                }}
-            }}
-            
-            setTimeout(setAlphaState, 300);
-            
-            // Also set it periodically to ensure it sticks
-            setInterval(function() {{
-                if (typeof setAlphaAttackEnabled === 'function') {{
-                    setAlphaAttackEnabled(alphaEnabled);
-                }}
-            }}, 2000);
-        }})();
+            const initialConfig = {{
+                numAIShips: {int(num_ai_ships)},
+                numEnemyShips: {int(num_enemy_ships)},
+                numBossShips: {int(num_boss_ships)},
+                canvasWidth: {int(canvas_width)},
+                canvasHeight: {int(canvas_height)},
+                playerShipActive: {str(bool(player_ship_active)).lower()},
+                mlEnabled: {str(bool(ml_enabled)).lower()},
+                mlMode: {js_string(ml_mode)},
+                marlEnabled: {str(bool(marl_enabled)).lower()},
+                marlTraining: {str(bool(marl_training)).lower()},
+                alphaAttackEnabled: {str(bool(alpha_attack_enabled)).lower()},
+                fuelRescueEnabled: {str(bool(fuel_rescue_enabled)).lower()},
+                formationType: {js_string(formation_type)},
+                autoAssignRoles: {str(bool(auto_assign_roles)).lower()},
+                adaptiveFormation: {str(bool(adaptive_formation)).lower()},
+                multiTargetMode: {js_string(multi_target_mode)},
+                escortMode: {js_string(escort_mode)},
+                tacticalSequences: {str(bool(tactical_sequences)).lower()},
+                formationTransitions: {str(bool(formation_transitions)).lower()},
+                advancedFlanking: {str(bool(advanced_flanking)).lower()},
+                mlDataCollection: {str(bool(ml_data_collection)).lower()},
+                mlHierarchyEnabled: {str(bool(ml_hierarchy_enabled)).lower()},
+                mlEvaluationEnabled: {str(bool(ml_evaluation_enabled)).lower()},
+                curriculumStage: {int(curriculum_stage)},
+                nnModelsEnabled: {str(bool(nn_models_enabled)).lower()},
+                modelVersion: {js_string(model_version)},
+                multitaskModelPath: {js_string(multitask_model_path)},
+                parameterModelPath: {js_string(parameter_model_path)},
+                priorityModelPath: {js_string(priority_model_path)},
+                actionModelPath: {js_string(action_model_path)},
+                preferWasm: {str(bool(prefer_wasm)).lower()},
+                fxEnabled: {str(bool(fx_enabled)).lower()},
+                hudEnabled: {str(bool(hud_enabled)).lower()},
+                sfxEnabled: {str(bool(sfx_enabled)).lower()},
+                musicEnabled: {str(bool(music_enabled)).lower()},
+                killCamEnabled: {str(bool(kill_cam_enabled)).lower()},
+                wavesEnabled: {str(bool(waves_enabled)).lower()},
+                bossPhasesEnabled: {str(bool(boss_phases_enabled)).lower()},
+                valueHeatmap: {str(bool(value_heatmap)).lower()},
+                actionWheels: {str(bool(action_wheels)).lower()},
+                policyOverlay: {str(bool(policy_overlay)).lower()},
+                trainedPolicyEnabled: {str(bool(trained_policy_enabled)).lower()},
+                trainedPolicyDeterministic: {str(bool(trained_policy_deterministic)).lower()},
+                worldMode: {js_string(world_mode)},
+                sphereCamera: {js_string(sphere_camera)},
+                sphereZoom: {float(sphere_zoom)},
+                worldScale: {float(world_scale)},
+                telemetryRate: {int(telemetry_rate)}
+            }};
+            window.__ASTEROIDS_CONFIG__ = initialConfig;
 
-        // Alpha fuel rescue (HELP ping + green fuel ship refuel)
-        (function() {{
-            const fuelRescueState = {str(fuel_rescue_enabled).lower()};
-            const fuelRescueOn = fuelRescueState === 'true' || fuelRescueState === true;
-
-            function setFuelRescueState() {{
-                if (typeof setFuelRescueEnabled === 'function') {{
-                    setFuelRescueEnabled(fuelRescueOn);
-                }} else {{
-                    setTimeout(setFuelRescueState, 100);
+            function applyAsteroidsConfig(cfg, isLiveUpdate) {{
+                if (!cfg || typeof cfg !== 'object') return;
+                if (cfg.canvasWidth && cfg.canvasHeight && typeof setCanvasSize === 'function' && !isLiveUpdate) {{
+                    setCanvasSize(cfg.canvasWidth, cfg.canvasHeight);
+                }}
+                if (typeof setWavesEnabled === 'function' && cfg.wavesEnabled !== undefined) setWavesEnabled(!!cfg.wavesEnabled);
+                if (typeof setBossPhasePlusEnabled === 'function' && cfg.bossPhasesEnabled !== undefined) setBossPhasePlusEnabled(!!cfg.bossPhasesEnabled);
+                if (typeof setNumAIShips === 'function' && cfg.numAIShips !== undefined) setNumAIShips(cfg.numAIShips);
+                if (typeof setNumEnemyShips === 'function' && cfg.numEnemyShips !== undefined) setNumEnemyShips(cfg.numEnemyShips);
+                if (typeof setNumBossShips === 'function' && cfg.numBossShips !== undefined) setNumBossShips(cfg.numBossShips);
+                if (typeof setPlayerShipActive === 'function' && cfg.playerShipActive !== undefined) setPlayerShipActive(!!cfg.playerShipActive);
+                if (typeof setAlphaAttackEnabled === 'function' && cfg.alphaAttackEnabled !== undefined) setAlphaAttackEnabled(!!cfg.alphaAttackEnabled);
+                if (typeof setFuelRescueEnabled === 'function' && cfg.fuelRescueEnabled !== undefined) setFuelRescueEnabled(!!cfg.fuelRescueEnabled);
+                if (typeof setFormationType === 'function' && cfg.formationType !== undefined) setFormationType(cfg.formationType);
+                if (typeof setAutoAssignRoles === 'function' && cfg.autoAssignRoles !== undefined) setAutoAssignRoles(!!cfg.autoAssignRoles);
+                if (typeof setAdaptiveFormation === 'function' && cfg.adaptiveFormation !== undefined) setAdaptiveFormation(!!cfg.adaptiveFormation);
+                if (typeof setMultiTargetMode === 'function' && cfg.multiTargetMode !== undefined) setMultiTargetMode(cfg.multiTargetMode);
+                if (typeof setEscortMode === 'function' && cfg.escortMode !== undefined) setEscortMode(cfg.escortMode);
+                if (typeof setTacticalSequences === 'function' && cfg.tacticalSequences !== undefined) setTacticalSequences(!!cfg.tacticalSequences);
+                if (typeof setFormationTransitions === 'function' && cfg.formationTransitions !== undefined) setFormationTransitions(!!cfg.formationTransitions);
+                if (typeof setAdvancedFlanking === 'function' && cfg.advancedFlanking !== undefined) setAdvancedFlanking(!!cfg.advancedFlanking);
+                if (typeof setMLMode === 'function' && cfg.mlEnabled !== undefined) setMLMode(!!cfg.mlEnabled, cfg.mlMode);
+                if (typeof setMARLMode === 'function' && cfg.marlEnabled !== undefined) setMARLMode(!!cfg.marlEnabled, !!cfg.marlTraining);
+                if (typeof setMLDataCollection === 'function' && cfg.mlDataCollection !== undefined) setMLDataCollection(!!cfg.mlDataCollection);
+                if (typeof setMLHierarchy === 'function' && cfg.mlHierarchyEnabled !== undefined) setMLHierarchy(!!cfg.mlHierarchyEnabled);
+                if (typeof setMLEvaluation === 'function' && cfg.mlEvaluationEnabled !== undefined) setMLEvaluation(!!cfg.mlEvaluationEnabled, !!cfg.mlEnabled);
+                if (typeof setMARLCurriculumStage === 'function' && cfg.curriculumStage !== undefined) setMARLCurriculumStage(cfg.curriculumStage);
+                if (cfg.mlDataCollection && typeof initializeMARLDataCollector === 'function') initializeMARLDataCollector();
+                if (cfg.nnModelsEnabled && typeof setNeuralNetworkModels === 'function') {{
+                    setNeuralNetworkModels(true, {{
+                        version: cfg.modelVersion,
+                        multiTaskModelPath: cfg.multitaskModelPath,
+                        parameterModelPath: cfg.parameterModelPath,
+                        priorityModelPath: cfg.priorityModelPath,
+                        actionModelPath: cfg.actionModelPath,
+                        preferWasm: !!cfg.preferWasm
+                    }});
+                }}
+                if (isLiveUpdate) {{
+                    if (typeof setFxEnabled === 'function' && cfg.fxEnabled !== undefined) setFxEnabled(!!cfg.fxEnabled);
+                    if (typeof setHudEnabled === 'function' && cfg.hudEnabled !== undefined) setHudEnabled(!!cfg.hudEnabled);
+                    if (typeof setSoundEnabled === 'function' && cfg.sfxEnabled !== undefined) setSoundEnabled(!!cfg.sfxEnabled);
+                    if (typeof setMusicEnabled === 'function' && cfg.musicEnabled !== undefined) setMusicEnabled(!!cfg.musicEnabled);
+                    if (typeof setValueHeatmap === 'function' && cfg.valueHeatmap !== undefined) setValueHeatmap(!!cfg.valueHeatmap);
+                    if (typeof setActionWheels === 'function' && cfg.actionWheels !== undefined) setActionWheels(!!cfg.actionWheels);
+                    if (typeof setPolicyOverlay === 'function' && cfg.policyOverlay !== undefined) setPolicyOverlay(!!cfg.policyOverlay);
+                    if (typeof setTrainedPolicyEnabled === 'function' && cfg.trainedPolicyEnabled !== undefined) {{
+                        setTrainedPolicyEnabled(!!cfg.trainedPolicyEnabled, !!cfg.trainedPolicyDeterministic);
+                    }}
+                    if (typeof setWorldScale === 'function' && cfg.worldScale !== undefined) setWorldScale(cfg.worldScale);
+                    if (typeof setWorldMode === 'function' && cfg.worldMode !== undefined) {{
+                        const sphere = cfg.worldMode === 'sphere';
+                        setWorldMode(sphere ? 'sphere' : 'torus');
+                        if (sphere && typeof SphereView !== 'undefined') {{
+                            if (cfg.sphereCamera) SphereView.setCamera(cfg.sphereCamera);
+                            if (cfg.sphereZoom !== undefined) SphereView.setZoom(cfg.sphereZoom);
+                            if (SphereView.setKillCamEnabled && cfg.killCamEnabled !== undefined) SphereView.setKillCamEnabled(!!cfg.killCamEnabled);
+                        }}
+                    }}
+                    if (typeof AsteroidsTelemetry !== 'undefined' && AsteroidsTelemetry.setBroadcastInterval && cfg.telemetryRate !== undefined) {{
+                        AsteroidsTelemetry.setBroadcastInterval(cfg.telemetryRate);
+                    }}
                 }}
             }}
 
-            setTimeout(setFuelRescueState, 350);
-            setInterval(function() {{
-                if (typeof setFuelRescueEnabled === 'function') {{
-                    setFuelRescueEnabled(fuelRescueOn);
+            window.applyAsteroidsConfig = applyAsteroidsConfig;
+            applyAsteroidsConfig(initialConfig, false);
+
+            window.addEventListener('message', function(event) {{
+                if (!event.data || typeof event.data !== 'object') return;
+                if (event.data.type === 'ASTEROIDS_UPDATE_CONFIG') {{
+                    applyAsteroidsConfig(event.data.config, true);
+                }} else if (event.data.type === 'ASTEROIDS_RESET_GAME' && typeof initGame === 'function') {{
+                    initGame(event.data.seed);
                 }}
-            }}, 2000);
-        }})();
-        
-        // PHASE 1 & 2: Set Formation Type and Role Assignment
-        (function() {{
-            const formationType = {js_string(formation_type)};
-            const autoAssignRoles = {str(auto_assign_roles).lower()};
-            const adaptiveFormation = {str(adaptive_formation).lower()};
-            const multiTargetMode = {js_string(multi_target_mode)};
-            const escortMode = {js_string(escort_mode)};
-            const tacticalSequences = {str(tactical_sequences).lower()};
-            const formationTransitions = {str(formation_transitions).lower()};
-            const advancedFlanking = {str(advanced_flanking).lower()};
-            
-            // Set formation type
-            if (typeof setFormationType === 'function') {{
-                setFormationType(formationType);
-            }}
-            
-            // Set auto-assign roles
-            if (typeof setAutoAssignRoles === 'function') {{
-                setAutoAssignRoles(autoAssignRoles === 'true' || autoAssignRoles === true);
-            }}
-            
-            // PHASE 3: Set adaptive formation
-            if (typeof setAdaptiveFormation === 'function') {{
-                setAdaptiveFormation(adaptiveFormation === 'true' || adaptiveFormation === true);
-            }}
-            
-            // PHASE 3: Set multi-target mode
-            if (typeof setMultiTargetMode === 'function') {{
-                setMultiTargetMode(multiTargetMode);
-            }}
-            
-            // PHASE 3: Set escort mode
-            if (typeof setEscortMode === 'function') {{
-                setEscortMode(escortMode);
-            }}
-            
-            // Ensure functions are called after game initialization
-            function setFormationState() {{
-                if (typeof setFormationType === 'function') {{
-                    setFormationType(formationType);
-                }} else {{
-                    setTimeout(setFormationState, 100);
-                }}
-            }}
-            
-            function setRoleState() {{
-                if (typeof setAutoAssignRoles === 'function') {{
-                    setAutoAssignRoles(autoAssignRoles === 'true' || autoAssignRoles === true);
-                }} else {{
-                    setTimeout(setRoleState, 100);
-                }}
-            }}
-            
-            setTimeout(setFormationState, 300);
-            setTimeout(setRoleState, 300);
-            
-            // Also set periodically to ensure they stick
-            setInterval(function() {{
-                if (typeof setFormationType === 'function') {{
-                    setFormationType(formationType);
-                }}
-                if (typeof setAutoAssignRoles === 'function') {{
-                    setAutoAssignRoles(autoAssignRoles === 'true' || autoAssignRoles === true);
-                }}
-                if (typeof setAdaptiveFormation === 'function') {{
-                    setAdaptiveFormation(adaptiveFormation === 'true' || adaptiveFormation === true);
-                }}
-                if (typeof setMultiTargetMode === 'function') {{
-                    setMultiTargetMode(multiTargetMode);
-                }}
-                if (typeof setEscortMode === 'function') {{
-                    setEscortMode(escortMode);
-                }}
-                if (typeof setTacticalSequences === 'function') {{
-                    setTacticalSequences(tacticalSequences === 'true' || tacticalSequences === true);
-                }}
-                if (typeof setFormationTransitions === 'function') {{
-                    setFormationTransitions(formationTransitions === 'true' || formationTransitions === true);
-                }}
-                if (typeof setAdvancedFlanking === 'function') {{
-                    setAdvancedFlanking(advancedFlanking === 'true' || advancedFlanking === true);
-                }}
-            }}, 2000);
+            }});
         }})();
         </script>
     </body>
@@ -1149,19 +1035,105 @@ def get_game_html(num_ai_ships, num_enemy_ships, num_boss_ships, canvas_width, c
 formation_type_value = formation_type if alpha_attack_enabled else "arrowhead"
 auto_assign_roles_value = auto_assign_roles if alpha_attack_enabled else True
 fuel_rescue_value = fuel_rescue_enabled if alpha_attack_enabled else False
+world_mode_value = "sphere" if world_mode.startswith("Sphere") else "torus"
+sphere_camera_value = {"Follow Alpha": "alpha", "Follow fleet": "fleet", "Follow boss": "boss", "Slow orbit": "orbit"}.get(sphere_camera, "alpha")
+
 game_html = get_game_html(num_ai_ships, num_enemy_ships, num_boss_ships, canvas_width, canvas_height, player_ship_active, ml_enabled, ml_mode, marl_enabled, marl_training, alpha_attack_enabled, formation_type_value, auto_assign_roles_value, fuel_rescue_value, adaptive_formation_value, multi_target_mode_value, escort_mode_value, tactical_sequences_enabled, formation_transitions_enabled, advanced_flanking_enabled, ml_data_collection, ml_hierarchy_enabled, ml_evaluation_enabled, curriculum_stage_value, nn_models_enabled, model_version, multitask_model_path, parameter_model_path, priority_model_path, action_model_path, prefer_wasm, trained_policy_path, trained_policy_enabled, trained_policy_deterministic, policy_overlay,
                           policy_worker=policy_worker, value_heatmap=value_heatmap, action_wheels=action_wheels,
                           fx_enabled=fx_enabled, hud_enabled=hud_enabled,
-                          world_mode="sphere" if world_mode.startswith("Sphere") else "torus",
-                          sphere_camera={"Follow Alpha": "alpha", "Follow fleet": "fleet", "Follow boss": "boss", "Slow orbit": "orbit"}.get(sphere_camera, "alpha"),
+                          world_mode=world_mode_value,
+                          sphere_camera=sphere_camera_value,
                           sphere_zoom=sphere_zoom, world_scale=world_scale,
                           telemetry_rate=telemetry_rate,
                           sfx_enabled=sfx_enabled, music_enabled=music_enabled,
                           kill_cam_enabled=kill_cam_enabled,
                           waves_enabled=waves_enabled, boss_phases_enabled=boss_phases_enabled)
-# Adjust component dimensions to match canvas + UI elements
-# Height: canvas height + status bar (~40px) + mission control bar (~50px) + controls section (~160px) + padding (~20px)
 component_height = canvas_height + 270
-# Note: components.html() doesn't support width parameter, width is controlled via CSS
-components.html(game_html, height=component_height, scrolling=False)
+
+BRIDGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "components", "asteroids_bridge")
+live_telemetry = None
+if bridge_enabled and os.path.isdir(BRIDGE_DIR):
+    _bridge_component = components.declare_component("asteroids_bridge", path=BRIDGE_DIR)
+    # Only structural changes (canvas size, checkpoint, TF.js/MARL script bundle,
+    # or toggling Three.js on/off) rebuild the inner iframe; all other sidebar
+    # tweaks flow live via postMessage without resetting the match.
+    boot_key = "|".join([
+        str(canvas_width), str(canvas_height), world_mode_value,
+        str(trained_policy_path), str(bool(policy_worker)),
+        str(bool(marl_enabled)), str(bool(nn_models_enabled or ml_enabled)),
+    ])
+    live_config = {
+        "numAIShips": int(num_ai_ships),
+        "numEnemyShips": int(num_enemy_ships),
+        "numBossShips": int(num_boss_ships),
+        "playerShipActive": bool(player_ship_active),
+        "alphaAttackEnabled": bool(alpha_attack_enabled),
+        "fuelRescueEnabled": bool(fuel_rescue_value),
+        "formationType": formation_type_value,
+        "autoAssignRoles": bool(auto_assign_roles_value),
+        "adaptiveFormation": bool(adaptive_formation_value),
+        "multiTargetMode": multi_target_mode_value,
+        "escortMode": escort_mode_value,
+        "tacticalSequences": bool(tactical_sequences_enabled),
+        "formationTransitions": bool(formation_transitions_enabled),
+        "advancedFlanking": bool(advanced_flanking_enabled),
+        "fxEnabled": bool(fx_enabled),
+        "hudEnabled": bool(hud_enabled),
+        "sfxEnabled": bool(sfx_enabled),
+        "musicEnabled": bool(music_enabled),
+        "killCamEnabled": bool(kill_cam_enabled),
+        "wavesEnabled": bool(waves_enabled),
+        "bossPhasesEnabled": bool(boss_phases_enabled),
+        "valueHeatmap": bool(value_heatmap),
+        "actionWheels": bool(action_wheels),
+        "policyOverlay": bool(policy_overlay),
+        "trainedPolicyEnabled": bool(trained_policy_enabled),
+        "trainedPolicyDeterministic": bool(trained_policy_deterministic),
+        "worldMode": world_mode_value,
+        "sphereCamera": sphere_camera_value,
+        "sphereZoom": float(sphere_zoom),
+        "worldScale": float(world_scale),
+        "telemetryRate": int(telemetry_rate),
+    }
+    live_telemetry = _bridge_component(
+        bootKey=boot_key,
+        html=game_html,
+        config=live_config,
+        height=component_height,
+        telemetrySync=bool(telemetry_sync),
+        command=st.session_state.get("mc_cmd_name"),
+        commandNonce=int(st.session_state.get("mc_cmd_nonce", 0)),
+        resetNonce=int(st.session_state.get("mc_reset_nonce", 0)),
+        key="asteroids_live_bridge",
+        default=None,
+    )
+else:
+    components.html(game_html, height=component_height, scrolling=False)
+
+# Live Python Telemetry Dashboard (renders when telemetry_sync streams packets back)
+if isinstance(live_telemetry, dict) and telemetry_sync:
+    hist = st.session_state.setdefault("telemetry_history", [])
+    if not hist or hist[-1].get("frame") != live_telemetry.get("frame"):
+        hist.append({
+            "frame": live_telemetry.get("frame", 0),
+            "score": live_telemetry.get("score", 0),
+            "scoreRate": live_telemetry.get("scoreRate", 0),
+            "alphaFuel": live_telemetry.get("alphaFuel", 100),
+            "fleetCount": live_telemetry.get("fleetCount", 0),
+        })
+        if len(hist) > 120:
+            del hist[:-120]
+    with st.expander("📡 Live Python Telemetry Dashboard", expanded=True):
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Score", f"{live_telemetry.get('score', 0):,}")
+        m2.metric("Score / s", f"{live_telemetry.get('scoreRate', 0)}")
+        m3.metric("Alpha Fuel", f"{live_telemetry.get('alphaFuel', 100)}%")
+        m4.metric("Active Fleet", f"{live_telemetry.get('fleetCount', 0)}")
+        if len(hist) >= 2:
+            c1, c2 = st.columns(2)
+            with c1:
+                st.line_chart({"Score Rate (/s)": [h["scoreRate"] for h in hist]}, height=150)
+            with c2:
+                st.line_chart({"Alpha Fuel (%)": [h["alphaFuel"] for h in hist]}, height=150)
+
 

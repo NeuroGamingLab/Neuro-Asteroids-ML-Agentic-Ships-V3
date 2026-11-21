@@ -59,6 +59,23 @@ function parseArgs(argv) {
         // reward gains refuel / dock-death / low-fuel terms. Checkpoints trained
         // this way only load into a build that offers the fuel layout.
         fuelRescue: 0,
+        // 1 enables escalating enemy waves and boss phase mechanics (matching
+        // the default browser gameplay).
+        waves: 0,
+        bossPhases: 0,
+        // 'flat' (48-way categorical) or 'factored' (11-logit multi-discrete:
+        // rotation[3] x thrust[2] x fire[4] x shield[2]).
+        actionMode: 'flat',
+        // Optional PPO stabilizers (0 disables to stay bit-identical with v1 runs).
+        lrEnd: -1,
+        entropyEnd: -1,
+        valueClip: 0,
+        returnNorm: 0,
+        orthogonalInit: 0,
+        // MAPPO & Multi-Entity Attention options (Phase 4).
+        centralizedCritic: 0,
+        entityTokens: 0,
+        creditMode: 'ippo',
         // 'torus' (flat wrap-around, default) or 'sphere' (great-circle motion,
         // arc distances). Same observation layout; recorded in the checkpoint.
         world: 'torus',
@@ -90,7 +107,14 @@ const args = parseArgs(typeof arguments !== 'undefined' ? arguments : []);
 
 print(`PPO training  stage=${args.stage}  agents=${args.agents}  iterations=${args.iterations}` +
     `  rollout=${args.rollout}  hidden=[${args.hidden}]  lr=${args.lr}  entropy=${args.entropy}` +
-    (args.fuelRescue ? '  fuelRescue=on' : '') + (args.world === 'sphere' ? '  world=sphere x' + args.worldScale : '') +
+    (args.actionMode !== 'flat' ? `  actionMode=${args.actionMode}` : '') +
+    (args.fuelRescue ? '  fuelRescue=on' : '') +
+    (args.waves ? '  waves=on' : '') +
+    (args.bossPhases ? '  bossPhases=on' : '') +
+    (args.entityTokens ? '  entityTokens=on' : '') +
+    (args.centralizedCritic ? '  MAPPO=on' : '') +
+    (args.creditMode !== 'ippo' ? `  credit=${args.creditMode}` : '') +
+    (args.world === 'sphere' ? '  world=sphere x' + args.worldScale : '') +
     (args.enemies >= 0 || args.bosses >= 0 ? `  enemies=${args.enemies} bosses=${args.bosses}` : ''));
 
 const env = new AsteroidsEnv({
@@ -98,6 +122,9 @@ const env = new AsteroidsEnv({
     maxSteps: args.maxSteps,
     curriculumStage: args.stage,
     fuelRescue: !!args.fuelRescue,
+    waves: !!args.waves,
+    bossPhases: !!args.bossPhases,
+    entityTokens: !!args.entityTokens,
     world: args.world,
     worldScale: args.worldScale,
     enemies: args.enemies >= 0 ? args.enemies : undefined,
@@ -107,32 +134,76 @@ const env = new AsteroidsEnv({
 
 const trainer = new PPOTrainer({
     obsDim: env.obsDim,
+    globalStateDim: args.centralizedCritic ? env.globalStateDim : 0,
     featureNames: env.featureNames,
     actionSize: ACTION_SPACE_SIZE,
+    actionMode: args.actionMode,
+    entityTokens: !!args.entityTokens,
+    centralizedCritic: !!args.centralizedCritic,
+    creditMode: args.creditMode,
     hidden: args.hidden,
     lr: args.lr,
+    lrEnd: args.lrEnd >= 0 ? args.lrEnd : undefined,
     criticLr: args.criticLr,
     entropyCoef: args.entropy,
+    entropyEnd: args.entropyEnd >= 0 ? args.entropyEnd : undefined,
+    valueClip: args.valueClip,
+    returnNorm: !!args.returnNorm,
+    orthogonalInit: !!args.orthogonalInit,
     epochs: args.epochs,
     minibatchSize: args.minibatch,
     seed: args.seed
 });
 
 // Curriculum transfer: continue from a policy trained on an earlier stage
-// instead of starting over. The observation includes curriculumStageNorm, so a
-// single network can represent stage-conditioned behaviour.
+// instead of starting over. If the target env has strictly wider observations
+// (e.g. transferring a 38-dim checkpoint into a 43-dim fuelRescue run) and the
+// hidden/action shapes agree, zero-pad the extra input rows cleanly.
+function widenInputLayer(net, targetInDim) {
+    if (!net || !net.layers || !net.layers.length) return false;
+    const first = net.layers[0];
+    if (first.inDim >= targetInDim) return first.inDim === targetInDim;
+    const oldIn = first.inDim;
+    const outDim = first.outDim;
+    const newW = new Float64Array(targetInDim * outDim);
+    newW.set(first.W);
+    first.W = newW;
+    first.gW = new Float64Array(targetInDim * outDim);
+    first.mW = new Float64Array(targetInDim * outDim);
+    first.vW = new Float64Array(targetInDim * outDim);
+    first.inDim = targetInDim;
+    net.spec.inDim = targetInDim;
+    net._scratch[0] = new Float64Array(targetInDim);
+    return true;
+}
+
 if (args.init && args.init !== 'none' && args.init !== 0) {
     try {
         const restored = PPOTrainer.fromJSON(JSON.parse(read(args.init)));
-        if (restored.obsDim !== env.obsDim || restored.actionSize !== ACTION_SPACE_SIZE) {
+        if (restored.actionSize !== ACTION_SPACE_SIZE || restored.actionMode !== trainer.actionMode) {
+            throw new Error(
+                `action mismatch: checkpoint is ${restored.actionSize} (${restored.actionMode}), ` +
+                `this run expects ${ACTION_SPACE_SIZE} (${trainer.actionMode})`
+            );
+        }
+        if (restored.obsDim < env.obsDim && !args.entityTokens) {
+            widenInputLayer(restored.actor, env.obsDim);
+            if (!args.centralizedCritic && restored.critic) widenInputLayer(restored.critic, env.obsDim);
+            print(`Widened checkpoint input ${restored.obsDim} -> ${env.obsDim} (zero-padded new features)`);
+            trainer.actor = restored.actor;
+            if (!args.centralizedCritic && restored.critic) trainer.critic = restored.critic;
+        } else if (restored.obsDim === env.obsDim) {
+            trainer.actor = restored.actor;
+            if (!args.centralizedCritic && restored.critic && restored.critic.spec.inDim === trainer.critic.spec.inDim) {
+                trainer.critic = restored.critic;
+            }
+        } else {
             throw new Error(
                 `shape mismatch: checkpoint is ${restored.obsDim}x${restored.actionSize}, ` +
                 `this run expects ${env.obsDim}x${ACTION_SPACE_SIZE}` +
                 (args.fuelRescue ? ' (fuel features on)' : '')
             );
         }
-        trainer.actor = restored.actor;
-        trainer.critic = restored.critic;
         print(`Warm-started from ${args.init}`);
     } catch (e) {
         print(`ERROR: could not load --init ${args.init}: ${e}`);
@@ -247,6 +318,9 @@ let best = { meanReturn: -Infinity, iteration: 0, json: null };
 const startedAt = Date.now();
 
 for (let iteration = 1; iteration <= args.iterations; iteration++) {
+    if (typeof trainer.setProgress === 'function') {
+        trainer.setProgress((iteration - 1) / Math.max(1, args.iterations));
+    }
     const t0 = Date.now();
     const samples = trainer.collectRollout(env, args.rollout, nextTrainSeed);
     const rolloutMs = Date.now() - t0;
@@ -308,6 +382,12 @@ for (let iteration = 1; iteration <= args.iterations; iteration++) {
                     agents: args.agents,
                     world: env.world,
                     worldScale: env.worldScale,
+                    fuelRescue: !!args.fuelRescue,
+                    waves: !!args.waves,
+                    bossPhases: !!args.bossPhases,
+                    entityTokens: !!args.entityTokens,
+                    centralizedCritic: !!args.centralizedCritic,
+                    creditMode: args.creditMode,
                     iteration,
                     trainedSteps: trainer.totalSteps,
                     evalMeanReturn: result.learned.summary.meanReturn,
@@ -334,6 +414,12 @@ if (finalEval.learned.summary.meanReturn > best.meanReturn) {
             agents: args.agents,
             world: env.world,
             worldScale: env.worldScale,
+            fuelRescue: !!args.fuelRescue,
+            waves: !!args.waves,
+            bossPhases: !!args.bossPhases,
+            entityTokens: !!args.entityTokens,
+            centralizedCritic: !!args.centralizedCritic,
+            creditMode: args.creditMode,
             iteration: args.iterations,
             trainedSteps: trainer.totalSteps,
             evalMeanReturn: finalEval.learned.summary.meanReturn,

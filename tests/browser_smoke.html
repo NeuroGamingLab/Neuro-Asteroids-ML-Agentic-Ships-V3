@@ -97,6 +97,15 @@ frame.addEventListener('load', async () => {
         } catch (e) { threw = e; }
         check('wave and boss UI draw without throwing', !threw, threw && threw.stack);
 
+        // Interactive 3D globe API & 3D critic heatmap hooks (v2.0 enhancements).
+        check('SphereView exposes interactive camera & inspection API',
+            typeof cw.SphereView === 'object' &&
+            typeof cw.SphereView.getCamera === 'function' &&
+            typeof cw.SphereView.clearInspection === 'function' &&
+            typeof cw.SphereView.isHeatmapVisible === 'function');
+        check('updateValueHeatmap & getValueHeatmapData exported',
+            typeof cw.updateValueHeatmap === 'function' && typeof cw.getValueHeatmapData === 'function');
+
         // Optional hooks from later features: only checked when present.
         if (query.get('extra')) {
             try { (window.extraChecks || (() => {}))(cw, run, check); } catch (e) { check('extra checks', false, e.stack); }

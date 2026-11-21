@@ -1,0 +1,15 @@
+# Remote Terraform State Backend Template (Encrypted S3 + DynamoDB Locking)
+#
+# Copy this file to `backend.tf`, replace the bucket/table names with your
+# pre-provisioned AWS resources, and run `terraform init -migrate-state` so
+# terraform.tfstate is never stored only on a local workstation.
+#
+# terraform {
+#   backend "s3" {
+#     bucket         = "REPLACE-WITH-YOUR-TFSTATE-BUCKET"
+#     key            = "asteroids-ai/aws/terraform.tfstate"
+#     region         = "ca-central-1"
+#     encrypt        = true
+#     dynamodb_table = "REPLACE-WITH-YOUR-TFSTATE-LOCK-TABLE"
+#   }
+# }

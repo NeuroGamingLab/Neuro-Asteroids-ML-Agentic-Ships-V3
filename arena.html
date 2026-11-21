@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Asteroids AI — Split-Screen A/B Policy Arena</title>
+<style>
+  :root { --primary: #00D2FF; --accent: #FF00FF; --green: #00FF88; --bg: #050712; --panel: #0b1124; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: radial-gradient(circle at top, #120926, var(--bg)); color: #e2e8f0; }
+  header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 18px; border-bottom: 1px solid rgba(0,210,255,0.25); background: rgba(5,7,18,0.9); }
+  h1 { margin: 0; font-size: 16px; background: linear-gradient(90deg, var(--primary), var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12px; }
+  select, input, button { background: var(--panel); color: #e2e8f0; border: 1px solid rgba(0,210,255,0.4); border-radius: 5px; padding: 5px 9px; font-family: inherit; font-size: 12px; }
+  button { cursor: pointer; font-weight: bold; }
+  button:hover { border-color: var(--accent); box-shadow: 0 0 10px rgba(255,0,255,0.3); }
+  .scoreboard { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; padding: 10px 18px; align-items: center; background: rgba(11,17,36,0.75); border-bottom: 1px solid rgba(0,210,255,0.18); }
+  .side-stat { display: flex; gap: 16px; align-items: baseline; flex-wrap: wrap; }
+  .side-stat.right { justify-content: flex-end; }
+  .score-val { font-size: 22px; font-weight: bold; color: var(--primary); }
+  .delta-pill { padding: 6px 14px; border-radius: 999px; border: 1px solid rgba(0,210,255,0.4); background: #070c1c; font-size: 13px; font-weight: bold; text-align: center; }
+  .arena-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 10px; }
+  .pane { background: #040710; border: 1px solid rgba(0,210,255,0.28); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; }
+  .pane-head { display: flex; justify-content: space-between; align-items: center; padding: 7px 12px; background: rgba(0,210,255,0.08); font-size: 12px; }
+  .pane iframe { width: 100%; height: 640px; border: 0; }
+  @media (max-width: 1100px) { .arena-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>⚔ ASTEROIDS AI — SPLIT-SCREEN A/B POLICY ARENA</h1>
+    <div style="font-size:11px;color:#94a3b8;margin-top:2px;">Identical AsteroidsRNG seed · Side-by-side real-time policy comparison · <a href="index.html" style="color:#00D2FF;">Main Sim</a> · <a href="replay.html" style="color:#FF00FF;">Replay Scrubber</a></div>
+  </div>
+  <div class="toolbar">
+    <label>Seed: <input id="seedInput" value="arena-42" style="width:92px"></label>
+    <label>World:
+      <select id="worldSelect">
+        <option value="sphere" selected>Sphere (3D x2)</option>
+        <option value="torus">Flat Torus (2D)</option>
+      </select>
+    </label>
+    <label>Left (A): <select id="policyA"></select></label>
+    <label>Right (B): <select id="policyB"></select></label>
+    <button id="launchBtn">▶ Sync Launch</button>
+    <button id="newSeedBtn">🎲 New Seed</button>
+  </div>
+</header>
+
+<section class="scoreboard">
+  <div class="side-stat">
+    <span style="color:#94a3b8;">A:</span>
+    <span id="scoreA" class="score-val">0</span>
+    <span id="metaA" style="font-size:12px;color:#94a3b8;">fleet - · rate -/s · fuel -%</span>
+  </div>
+  <div id="deltaPill" class="delta-pill">Δ Score (B − A): 0</div>
+  <div class="side-stat right">
+    <span id="metaB" style="font-size:12px;color:#94a3b8;">fleet - · rate -/s · fuel -%</span>
+    <span id="scoreB" class="score-val" style="color:#00FF88;">0</span>
+    <span style="color:#94a3b8;">:B</span>
+  </div>
+</section>
+
+<main class="arena-grid">
+  <div class="pane">
+    <div class="pane-head"><strong id="labelA">Policy A</strong><span style="color:#94a3b8;">Synced Seed</span></div>
+    <iframe id="frameA"></iframe>
+  </div>
+  <div class="pane">
+    <div class="pane-head"><strong id="labelB" style="color:#00FF88;">Policy B</strong><span style="color:#94a3b8;">Synced Seed</span></div>
+    <iframe id="frameB"></iframe>
+  </div>
+</main>
+
+<script>
+(async function () {
+    const selA = document.getElementById('policyA');
+    const selB = document.getElementById('policyB');
+    const frameA = document.getElementById('frameA');
+    const frameB = document.getElementById('frameB');
+    const state = { A: null, B: null };
+
+    const options = [{ label: 'Rule-Based Heuristic', value: 'none' }];
+    try {
+        const reg = await fetch('models/registry.json').then(r => r.ok ? r.json() : null);
+        if (reg && Array.isArray(reg.models)) {
+            reg.models.forEach(m => {
+                options.push({ label: `${m.name} (${m.world} x${m.worldScale}, ${m.obsDim}d)`, value: m.path });
+            });
+        }
+    } catch (e) { /* fallback */ }
+    if (options.length === 1) {
+        options.push({ label: 'PPO Swarm Sphere x2', value: 'models/policy_swarm_sphere_x2.json' });
+        options.push({ label: 'PPO Stage 3 Torus', value: 'models/policy_stage3.json' });
+    }
+
+    for (const opt of options) {
+        selA.add(new Option(opt.label, opt.value));
+        selB.add(new Option(opt.label, opt.value));
+    }
+    selA.selectedIndex = 0; // Rule-based baseline
+    selB.selectedIndex = Math.min(1, options.length - 1); // Top PPO checkpoint
+
+    function buildUrl(policyVal) {
+        const seed = encodeURIComponent(document.getElementById('seedInput').value.trim() || 'arena-42');
+        const world = document.getElementById('worldSelect').value;
+        const scale = world === 'sphere' ? '2' : '1';
+        return `index.html?world=${world}&scale=${scale}&seed=${seed}&policy=${encodeURIComponent(policyVal)}&waves=0&heatmap=0`;
+    }
+
+    function launch() {
+        state.A = null; state.B = null;
+        document.getElementById('labelA').textContent = 'A: ' + selA.options[selA.selectedIndex].text;
+        document.getElementById('labelB').textContent = 'B: ' + selB.options[selB.selectedIndex].text;
+        frameA.src = buildUrl(selA.value);
+        frameB.src = buildUrl(selB.value);
+        renderScores();
+    }
+
+    function renderScores() {
+        const a = state.A, b = state.B;
+        const sA = a ? a.score : 0;
+        const sB = b ? b.score : 0;
+        document.getElementById('scoreA').textContent = sA.toLocaleString();
+        document.getElementById('scoreB').textContent = sB.toLocaleString();
+        if (a) document.getElementById('metaA').textContent = `fleet ${a.fleetCount} · ${a.scoreRate}/s · fuel ${a.alphaFuel}%`;
+        if (b) document.getElementById('metaB').textContent = `fleet ${b.fleetCount} · ${b.scoreRate}/s · fuel ${b.alphaFuel}%`;
+        const diff = sB - sA;
+        const pill = document.getElementById('deltaPill');
+        pill.textContent = `Δ Score (B − A): ${diff >= 0 ? '+' : ''}${diff.toLocaleString()}`;
+        pill.style.color = diff > 0 ? '#00FF88' : (diff < 0 ? '#FF4466' : '#00D2FF');
+    }
+
+    window.addEventListener('message', (ev) => {
+        if (!ev.data || ev.data.type !== 'ASTEROIDS_TELEMETRY') return;
+        if (ev.source === frameA.contentWindow) state.A = ev.data.payload;
+        else if (ev.source === frameB.contentWindow) state.B = ev.data.payload;
+        renderScores();
+    });
+
+    document.getElementById('launchBtn').addEventListener('click', launch);
+    document.getElementById('newSeedBtn').addEventListener('click', () => {
+        document.getElementById('seedInput').value = 'arena-' + Math.floor(Math.random() * 10000);
+        launch();
+    });
+    launch();
+})();
+</script>
+</body>
+</html>

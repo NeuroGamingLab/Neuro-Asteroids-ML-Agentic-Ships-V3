@@ -45,11 +45,14 @@
         return first;
     }
 
+    let focusLabel = '';
+
     function updateHeatmapRow(r, shipRef) {
-        const w = canvas.width;
-        const h = canvas.height;
+        const w = (typeof worldW === 'function') ? worldW() : canvas.width;
+        const h = (typeof worldH === 'function') ? worldH() : canvas.height;
         const cellW = w / GRID_COLS;
         const cellH = h / GRID_ROWS;
+        focusLabel = shipRef.isAlpha ? 'alpha' : ('agent ' + shipRef.agentId);
 
         // Move the ship hypothetically; the extractor only reads position, so
         // restoring x/y afterwards leaves the game untouched. try/finally in
@@ -76,6 +79,7 @@
 
         nextRow = (nextRow + 1) % GRID_ROWS;
         if (nextRow === 0) {
+            const wasReady = haveValues;
             haveValues = true;
             let lo = Infinity;
             let hi = -Infinity;
@@ -84,10 +88,38 @@
                 if (values[i] > hi) hi = values[i];
             }
             // Smooth the colour range so the map does not flicker between refreshes.
-            vMin = haveValues ? vMin * 0.7 + lo * 0.3 : lo;
-            vMax = haveValues ? vMax * 0.7 + hi * 0.3 : hi;
+            vMin = wasReady ? vMin * 0.7 + lo * 0.3 : lo;
+            vMax = wasReady ? vMax * 0.7 + hi * 0.3 : hi;
             if (vMax - vMin < 1e-3) vMax = vMin + 1e-3;
         }
+    }
+
+    // Advance the critic value grid by one row without drawing to 2D canvas.
+    // Used by the 3D sphere path so SphereView can shade its spherical heatmap
+    // shell from the exact same critic evaluations.
+    function updateValueHeatmap() {
+        if (!heatmapEnabled) return false;
+        const r = runner();
+        if (!r || !r.enabled || !r.critic) return false;
+        const shipRef = focusShip();
+        if (!shipRef) return false;
+        updateHeatmapRow(r, shipRef);
+        return haveValues;
+    }
+
+    function getValueHeatmapData() {
+        const r = runner();
+        const active = !!(heatmapEnabled && r && r.enabled && r.critic && haveValues);
+        return {
+            enabled: heatmapEnabled,
+            active,
+            cols: GRID_COLS,
+            rows: GRID_ROWS,
+            values,
+            vMin,
+            vMax,
+            focusLabel
+        };
     }
 
     // Low value -> magenta/red, high value -> cyan. Matches the theme.
@@ -207,6 +239,8 @@
     }
 
     root.drawValueHeatmap = drawValueHeatmap;
+    root.updateValueHeatmap = updateValueHeatmap;
+    root.getValueHeatmapData = getValueHeatmapData;
     root.drawActionWheels = drawActionWheels;
     root.setValueHeatmap = function (on) {
         heatmapEnabled = !!on;

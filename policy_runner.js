@@ -22,6 +22,9 @@
             this.policy = null;
             this.actor = null;
             this.critic = null;
+            this.actionMode = 'flat';
+            this.criticMode = 'local';
+            this.globalStateDim = 0;
             this.enabled = false;
             this.deterministic = false;
             this.meta = null;
@@ -60,15 +63,8 @@
             const expectedActions = resolveGlobal('ACTION_SPACE_SIZE');
             const expectedNames = resolveGlobal('RL_FEATURE_NAMES');
             const fuelNames = resolveGlobal('RL_FEATURE_NAMES_FUEL');
+            const entityNames = resolveGlobal('RL_FEATURE_NAMES_ENTITY');
 
-            // Fail loudly on a shape mismatch. Silently running a policy whose
-            // observation layout differs from the current feature extractor
-            // produces plausible-looking but meaningless behaviour.
-            //
-            // These checks also fail when they cannot find what to compare
-            // against. An earlier version skipped a check whose expected value
-            // was undefined, which is how the action-count check came to be
-            // permanently disabled without anyone noticing.
             if (expectedDim === undefined || expectedActions === undefined || !expectedNames) {
                 throw new Error(
                     'cannot verify this policy: the game build did not expose its ' +
@@ -81,27 +77,32 @@
                 );
             }
 
-            // Two observation layouts are known: the base RL vector and the
-            // base vector plus the fuel-rescue features. The checkpoint's own
-            // featureNames decide which extractor options to use; anything
-            // else is refused.
+            // Three observation layouts are known: base RL (38), fuel RL (43),
+            // and entity-token RL (103). The checkpoint's featureNames choose
+            // the matching extractor options; anything else is refused.
             const names = payload.featureNames ? payload.featureNames.join() : '';
             if (names === expectedNames.join() && payload.obsDim === expectedDim) {
                 this.featureOptions = {};
             } else if (fuelNames && names === fuelNames.join() && payload.obsDim === fuelNames.length) {
                 this.featureOptions = { fuelFeatures: true };
+            } else if (entityNames && names === entityNames.join() && payload.obsDim === entityNames.length) {
+                this.featureOptions = { fuelFeatures: true, entityTokens: true };
             } else if (payload.obsDim !== expectedDim) {
                 throw new Error(
                     `policy expects ${payload.obsDim} features but this build produces ${expectedDim}` +
-                    (fuelNames ? ` (or ${fuelNames.length} with fuel features)` : '')
+                    (fuelNames ? ` (or ${fuelNames.length} fuel / ${entityNames ? entityNames.length : '?'} entity)` : '')
                 );
             } else {
                 throw new Error('policy feature order does not match this build');
             }
 
+            const loader = root.NN.networkFromJSON || root.NN.MLP.fromJSON;
             this.policy = payload;
-            this.actor = root.NN.MLP.fromJSON(payload.actor);
-            this.critic = payload.critic ? root.NN.MLP.fromJSON(payload.critic) : null;
+            this.actor = loader(payload.actor);
+            this.critic = payload.critic ? loader(payload.critic) : null;
+            this.actionMode = payload.actionMode === 'factored' ? 'factored' : 'flat';
+            this.criticMode = payload.criticMode === 'centralized' ? 'centralized' : 'local';
+            this.globalStateDim = payload.globalStateDim || 0;
             this.meta = payload.meta || {};
 
             // curriculumStageNorm is one of the observation features, so it has to
@@ -137,6 +138,7 @@
         observe() {
             const agentIds = [];
             const obs = [];
+            const entityRefs = [];
             for (let i = 0; i < aiShips.length; i++) {
                 const shipRef = aiShips[i];
                 if (!shipRef || this.isScripted(shipRef)) continue;
@@ -147,11 +149,34 @@
                 );
                 agentIds.push(agentId);
                 obs.push(features._vector);
+                entityRefs.push(features._entities || null);
             }
-            return { agentIds, obs };
+            const globalState = (this.criticMode === 'centralized' && typeof MLFeatureExtractor.extractGlobalState === 'function')
+                ? MLFeatureExtractor.extractGlobalState(aiShips, asteroids, enemyShips, enemyBullets, { numAgents: aiShips.length })
+                : null;
+            return { agentIds, obs, entityRefs, globalState };
         }
 
-        decorate(agentId, action, probs, entropy, value) {
+        buildCriticInput(observation, globalState) {
+            if (this.criticMode !== 'centralized') return observation;
+            const g = globalState || (typeof MLFeatureExtractor.extractGlobalState === 'function'
+                ? MLFeatureExtractor.extractGlobalState(aiShips, asteroids, enemyShips, enemyBullets, { numAgents: aiShips.length })
+                : new Array(this.globalStateDim).fill(0));
+            const out = new Float64Array(observation.length + this.globalStateDim);
+            if (this.featureOptions.entityTokens) {
+                const tokenSpan = (resolveGlobal('ENTITY_TOKEN_SLOTS') || 10) * (resolveGlobal('ENTITY_TOKEN_DIM') || 6);
+                const baseDim = observation.length - tokenSpan;
+                for (let i = 0; i < baseDim; i++) out[i] = observation[i];
+                for (let i = 0; i < this.globalStateDim; i++) out[baseDim + i] = g[i] || 0;
+                for (let i = 0; i < tokenSpan; i++) out[baseDim + this.globalStateDim + i] = observation[baseDim + i];
+            } else {
+                for (let i = 0; i < observation.length; i++) out[i] = observation[i];
+                for (let i = 0; i < this.globalStateDim; i++) out[observation.length + i] = g[i] || 0;
+            }
+            return out;
+        }
+
+        decorate(agentId, action, probs, entropy, value, attentionWeights, attendedEntities) {
             return {
                 agentId,
                 action,
@@ -160,7 +185,9 @@
                 entropy,
                 value,
                 probs,
-                topActions: topK(probs, 3)
+                topActions: topK(probs, 3),
+                attentionWeights: attentionWeights || null,
+                attendedEntities: attendedEntities || null
             };
         }
 
@@ -169,24 +196,23 @@
             if (!this.enabled || !this.actor) return;
 
             const start = (typeof performance !== 'undefined') ? performance.now() : Date.now();
-            const { agentIds, obs } = this.observe();
+            const { agentIds, obs, entityRefs, globalState } = this.observe();
 
             if (this.worker && this.workerReady) {
-                // Apply whatever the worker returned for the previous frame and
-                // post this frame's observations. Actions therefore lag the
-                // observation they were computed from by one frame (16 ms).
                 if (this.workerPendingActions) {
                     setPolicyControl(true, this.workerPendingActions);
                 } else {
                     setPolicyControl(true, []);
                 }
                 this.workerFrame++;
+                this._lastEntityRefs = { agentIds, entityRefs };
                 this.worker.postMessage({
                     type: 'infer',
                     frame: this.workerFrame,
                     deterministic: this.deterministic,
                     agentIds,
-                    obs
+                    obs,
+                    globalState
                 });
                 this.inferenceMs = ((typeof performance !== 'undefined') ? performance.now() : Date.now()) - start;
                 return;
@@ -198,20 +224,30 @@
                 const observation = obs[k];
                 const agentId = agentIds[k];
                 const logits = this.actor.forward(observation);
-                const { probs } = root.NN.logSoftmax(logits);
+                const attn = this.actor.lastAttentionWeights ? Array.from(this.actor.lastAttentionWeights) : null;
+                let action, probs, entropy;
 
-                let action;
-                if (this.deterministic) {
-                    action = 0;
-                    for (let a = 1; a < probs.length; a++) if (probs[a] > probs[action]) action = a;
+                if (this.actionMode === 'factored') {
+                    const sampled = root.NN.sampleFactored(logits, this.rng, this.deterministic);
+                    action = sampled.action;
+                    probs = Array.from(sampled.probs);
+                    entropy = sampled.entropy;
                 } else {
-                    action = root.NN.sampleCategorical(probs, this.rng);
+                    const dist = root.NN.logSoftmax(logits);
+                    probs = Array.from(dist.probs);
+                    entropy = root.NN.entropyOf(dist.probs);
+                    if (this.deterministic) {
+                        action = 0;
+                        for (let a = 1; a < probs.length; a++) if (probs[a] > probs[action]) action = a;
+                    } else {
+                        action = root.NN.sampleCategorical(dist.probs, this.rng);
+                    }
                 }
 
+                const val = this.critic ? this.critic.forward(this.buildCriticInput(observation, globalState))[0] : null;
                 actions[agentId] = action;
                 decisions[agentId] = this.decorate(
-                    agentId, action, Array.from(probs), root.NN.entropyOf(probs),
-                    this.critic ? this.critic.forward(observation)[0] : null
+                    agentId, action, probs, entropy, val, attn, entityRefs[k]
                 );
             }
 
@@ -224,7 +260,7 @@
         // heatmap). Runs on the main thread regardless of the worker: the
         // heatmap is throttled and only needs a handful of forwards per frame.
         valueOf(observation) {
-            return this.critic ? this.critic.forward(observation)[0] : null;
+            return this.critic ? this.critic.forward(this.buildCriticInput(observation, null))[0] : null;
         }
 
         // Move inference into a Web Worker. `nnSource` is the text of
@@ -250,6 +286,10 @@
                     type: 'load',
                     actor: this.policy.actor,
                     critic: this.policy.critic || null,
+                    actionMode: this.actionMode,
+                    criticMode: this.criticMode,
+                    globalStateDim: this.globalStateDim,
+                    entityTokens: !!this.featureOptions.entityTokens,
                     seed: 'policy-worker-' + Date.now()
                 });
                 this.worker = worker;
@@ -289,9 +329,12 @@
                 this.workerLastResultFrame = message.frame;
                 const actions = [];
                 const decisions = [];
-                for (const d of message.decisions) {
+                for (let idx = 0; idx < message.decisions.length; idx++) {
+                    const d = message.decisions[idx];
                     actions[d.agentId] = d.action;
-                    decisions[d.agentId] = this.decorate(d.agentId, d.action, d.probs, d.entropy, d.value);
+                    const refs = (this._lastEntityRefs && this._lastEntityRefs.entityRefs)
+                        ? this._lastEntityRefs.entityRefs[idx] : null;
+                    decisions[d.agentId] = this.decorate(d.agentId, d.action, d.probs, d.entropy, d.value, d.attentionWeights, refs);
                 }
                 this.workerPendingActions = actions;
                 this.lastDecisions = decisions;

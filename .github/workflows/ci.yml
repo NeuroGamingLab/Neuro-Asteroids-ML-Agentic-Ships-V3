@@ -18,9 +18,9 @@ jobs:
       - name: Unit tests, env determinism, browser inference path, syntax
         run: ./run_tests.sh
 
-      - name: Python syntax (Streamlit app + training driver)
+      - name: Python syntax (Streamlit app, training drivers & test scripts)
         run: |
-          python3 -m py_compile app.py training/run_training.py training/run_matrix.py
+          python3 -m py_compile app.py training/*.py tests/*.py
 
       - name: Training smoke test (stage 0, 3 iterations)
         # Proves the trainer still runs end to end and emits a loadable
@@ -46,9 +46,20 @@ jobs:
         run: |
           JSC=/System/Library/Frameworks/JavaScriptCore.framework/Versions/A/Helpers/jsc
           $JSC training/train.js -- --stage 0 --iterations 2 --rollout 512 --agents 4 \
-            --fuelRescue 1 --evalEvery 0 --evalEpisodes 2 --hidden 32,32 > /tmp/train_fuel.log
+            --fuelRescue 1 --waves 1 --bossPhases 1 --evalEvery 0 --evalEpisodes 2 --hidden 32,32 > /tmp/train_fuel.log
           grep -q MODEL_BEGIN /tmp/train_fuel.log
           grep -q '"obsDim":43' /tmp/train_fuel.log
+
+      - name: Training smoke test for MAPPO + Entity-Attention + Factored PPO (103-dim)
+        run: |
+          JSC=/System/Library/Frameworks/JavaScriptCore.framework/Versions/A/Helpers/jsc
+          $JSC training/train.js -- --stage 0 --iterations 2 --rollout 512 --agents 3 \
+            --entityTokens 1 --centralizedCritic 1 --actionMode factored --creditMode coma \
+            --valueClip 0.2 --returnNorm 1 --orthogonalInit 1 --evalEvery 0 --evalEpisodes 2 --hidden 32,32 > /tmp/train_mappo.log
+          grep -q MODEL_BEGIN /tmp/train_mappo.log
+          grep -q '"networkType":"entity-attention"' /tmp/train_mappo.log
+          grep -q '"actionMode":"factored"' /tmp/train_mappo.log
+          grep -q '"criticMode":"centralized"' /tmp/train_mappo.log
 
       - name: Benchmark regression gate (reference policies vs stored baseline)
         # Re-measures the rule-based controller and the seeded random policy on

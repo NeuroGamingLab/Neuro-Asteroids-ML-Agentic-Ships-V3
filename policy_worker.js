@@ -23,6 +23,10 @@
 
     let actor = null;
     let critic = null;
+    let actionMode = 'flat';
+    let criticMode = 'local';
+    let globalStateDim = 0;
+    let entityTokens = false;
     let rng = Math.random;
 
     // Same generator as rng.js, duplicated so the worker has no extra dependency.
@@ -59,8 +63,13 @@
         }
         if (message.type === 'load') {
             try {
-                actor = NN.MLP.fromJSON(message.actor);
-                critic = message.critic ? NN.MLP.fromJSON(message.critic) : null;
+                const loader = NN.networkFromJSON || NN.MLP.fromJSON;
+                actor = loader(message.actor);
+                critic = message.critic ? loader(message.critic) : null;
+                actionMode = message.actionMode === 'factored' ? 'factored' : 'flat';
+                criticMode = message.criticMode === 'centralized' ? 'centralized' : 'local';
+                globalStateDim = message.globalStateDim || 0;
+                entityTokens = !!message.entityTokens;
                 rng = mulberry32(hashSeed(message.seed || 'policy-worker'));
                 root.postMessage({ type: 'ready' });
             } catch (e) {
@@ -71,17 +80,44 @@
         if (message.type === 'infer') {
             if (!actor) return;
             const decisions = [];
+            const g = message.globalState || null;
             for (let i = 0; i < message.obs.length; i++) {
                 const observation = message.obs[i];
                 const logits = actor.forward(observation);
-                const { probs } = NN.logSoftmax(logits);
-                const action = message.deterministic ? argmax(probs) : NN.sampleCategorical(probs, rng);
+                const attentionWeights = actor.lastAttentionWeights ? Array.from(actor.lastAttentionWeights) : null;
+                let action, probs, entropy;
+                if (actionMode === 'factored') {
+                    const sampled = NN.sampleFactored(logits, rng, message.deterministic);
+                    action = sampled.action;
+                    probs = Array.from(sampled.probs);
+                    entropy = sampled.entropy;
+                } else {
+                    const dist = NN.logSoftmax(logits);
+                    probs = Array.from(dist.probs);
+                    entropy = NN.entropyOf(dist.probs);
+                    action = message.deterministic ? argmax(probs) : NN.sampleCategorical(dist.probs, rng);
+                }
+                let cIn = observation;
+                if (critic && criticMode === 'centralized' && globalStateDim > 0) {
+                    cIn = new Float64Array(observation.length + globalStateDim);
+                    if (entityTokens && critic.spec && critic.spec.numTokens) {
+                        const tokenSpan = critic.spec.numTokens * critic.spec.tokenDim;
+                        const baseDim = observation.length - tokenSpan;
+                        for (let j = 0; j < baseDim; j++) cIn[j] = observation[j];
+                        for (let j = 0; j < globalStateDim; j++) cIn[baseDim + j] = (g && g[j]) || 0;
+                        for (let j = 0; j < tokenSpan; j++) cIn[baseDim + globalStateDim + j] = observation[baseDim + j];
+                    } else {
+                        for (let j = 0; j < observation.length; j++) cIn[j] = observation[j];
+                        for (let j = 0; j < globalStateDim; j++) cIn[observation.length + j] = (g && g[j]) || 0;
+                    }
+                }
                 decisions.push({
                     agentId: message.agentIds[i],
                     action,
-                    probs: Array.from(probs),
-                    entropy: NN.entropyOf(probs),
-                    value: critic ? critic.forward(observation)[0] : null
+                    probs,
+                    entropy,
+                    attentionWeights,
+                    value: critic ? critic.forward(cIn)[0] : null
                 });
             }
             root.postMessage({ type: 'result', frame: message.frame, decisions });
